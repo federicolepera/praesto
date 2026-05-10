@@ -1,0 +1,9 @@
+apiVersion: praesto.praesto.io/v1alpha1
+kind: ModelCache
+metadata:
+  labels:
+    app.kubernetes.io/name: praesto
+    app.kubernetes.io/managed-by: kustomize
+  name: modelcache-sample
+spec:
+  # TODO(user): Add fields here

@@ -8,4 +8,14 @@ layout:
 - go.kubebuilder.io/v4
 projectName: praesto
 repo: github.com/federicolepera/praesto
+resources:
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: praesto.io
+  group: praesto
+  kind: ModelCache
+  path: github.com/federicolepera/praesto/api/v1alpha1
+  version: v1alpha1
 version: "3"

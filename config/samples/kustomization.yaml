@@ -1,0 +1,4 @@
+## Append samples of your project ##
+resources:
+- praesto_v1alpha1_modelcache.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples
