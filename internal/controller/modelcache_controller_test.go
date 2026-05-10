@@ -19,66 +19,177 @@ package controller
 import (
 	"context"
 
-	. "github.com/onsi/ginkgo/v2"
-	. "github.com/onsi/gomega"
+	"github.com/federicolepera/praesto/internal/downloader"
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 
 	praestov1alpha1 "github.com/federicolepera/praesto/api/v1alpha1"
 )
 
 var _ = Describe("ModelCache Controller", func() {
-	Context("When reconciling a resource", func() {
-		const resourceName = "test-resource"
+	const resourceName = "test-resource"
+	const namespace = "default"
 
-		ctx := context.Background()
+	ctx := context.Background()
+	typeNamespacedName := types.NamespacedName{Name: resourceName, Namespace: namespace}
 
-		typeNamespacedName := types.NamespacedName{
-			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
+	BeforeEach(func() {
+		mc := &praestov1alpha1.ModelCache{
+			ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: namespace},
+			Spec: praestov1alpha1.ModelCacheSpec{
+				Source: praestov1alpha1.Source{Huggingface: praestov1alpha1.HuggingfaceSource{
+					Repo:     "org/model",
+					Revision: "main",
+					Token:    praestov1alpha1.Token{SecretRef: praestov1alpha1.SecretRef{Name: "hf-secret", Key: "token"}},
+				}},
+				Storage: praestov1alpha1.Storage{
+					StorageClassName: "fast-rwx",
+					Size:             "1Gi",
+				},
+			},
 		}
-		modelcache := &praestov1alpha1.ModelCache{}
+		Expect(k8sClient.Create(ctx, mc)).To(Succeed())
+	})
 
-		BeforeEach(func() {
-			By("creating the custom resource for the Kind ModelCache")
-			err := k8sClient.Get(ctx, typeNamespacedName, modelcache)
-			if err != nil && errors.IsNotFound(err) {
-				resource := &praestov1alpha1.ModelCache{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      resourceName,
-						Namespace: "default",
-					},
-					// TODO(user): Specify other spec details if needed.
-				}
-				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
-			}
-		})
+	AfterEach(func() {
+		job := &batchv1.Job{}
+		err := k8sClient.Get(ctx, types.NamespacedName{Name: downloader.JobNameForModelCache(resourceName), Namespace: namespace}, job)
+		if err == nil {
+			Expect(k8sClient.Delete(ctx, job)).To(Succeed())
+		} else {
+			Expect(errors.IsNotFound(err)).To(BeTrue())
+		}
 
-		AfterEach(func() {
-			// TODO(user): Cleanup logic after each test, like removing the resource instance.
-			resource := &praestov1alpha1.ModelCache{}
-			err := k8sClient.Get(ctx, typeNamespacedName, resource)
-			Expect(err).NotTo(HaveOccurred())
+		pvc := &corev1.PersistentVolumeClaim{}
+		err = k8sClient.Get(ctx, types.NamespacedName{Name: downloader.PVCNameForModelCache(resourceName), Namespace: namespace}, pvc)
+		if err == nil {
+			Expect(k8sClient.Delete(ctx, pvc)).To(Succeed())
+		}
 
-			By("Cleanup the specific resource instance ModelCache")
-			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
-		})
-		It("should successfully reconcile the resource", func() {
-			By("Reconciling the created resource")
-			controllerReconciler := &ModelCacheReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
-			}
+		mc := &praestov1alpha1.ModelCache{}
+		if err := k8sClient.Get(ctx, typeNamespacedName, mc); err == nil {
+			Expect(k8sClient.Delete(ctx, mc)).To(Succeed())
+		}
+	})
 
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
-		})
+	It("creates a pvc when it does not exist", func() {
+		controllerReconciler := &ModelCacheReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+		_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+		Expect(err).NotTo(HaveOccurred())
+
+		createdPVC := &corev1.PersistentVolumeClaim{}
+		Eventually(func() error {
+			return k8sClient.Get(ctx, types.NamespacedName{Name: downloader.PVCNameForModelCache(resourceName), Namespace: namespace}, createdPVC)
+		}).Should(Succeed())
+
+		Expect(createdPVC.Spec.AccessModes).To(ContainElement(corev1.ReadWriteMany))
+		Expect(createdPVC.Spec.StorageClassName).NotTo(BeNil())
+		Expect(*createdPVC.Spec.StorageClassName).To(Equal("fast-rwx"))
+		Expect(createdPVC.Spec.Resources.Requests[corev1.ResourceStorage]).To(Equal(resource.MustParse("1Gi")))
+		Expect(createdPVC.OwnerReferences).NotTo(BeEmpty())
+		Expect(createdPVC.OwnerReferences[0].Kind).To(Equal("ModelCache"))
+
+		job := &batchv1.Job{}
+		err = k8sClient.Get(ctx, types.NamespacedName{Name: downloader.JobNameForModelCache(resourceName), Namespace: namespace}, job)
+		Expect(errors.IsNotFound(err)).To(BeTrue())
+	})
+
+	It("creates a download job when the pvc is bound", func() {
+		pvc := &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      downloader.PVCNameForModelCache(resourceName),
+				Namespace: namespace,
+				Labels:    downloader.ModelCacheLabels(resourceName),
+			},
+			Spec: validPVCSpec(),
+		}
+		Expect(k8sClient.Create(ctx, pvc)).To(Succeed())
+		pvc.Status.Phase = corev1.ClaimBound
+		Expect(k8sClient.Status().Update(ctx, pvc)).To(Succeed())
+
+		controllerReconciler := &ModelCacheReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+		_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+		Expect(err).NotTo(HaveOccurred())
+
+		createdJob := &batchv1.Job{}
+		Eventually(func() error {
+			return k8sClient.Get(ctx, types.NamespacedName{Name: downloader.JobNameForModelCache(resourceName), Namespace: namespace}, createdJob)
+		}).Should(Succeed())
+
+		Expect(createdJob.Spec.ActiveDeadlineSeconds).NotTo(BeNil())
+		Expect(*createdJob.Spec.ActiveDeadlineSeconds).To(Equal(int64(7200)))
+		Expect(createdJob.Spec.BackoffLimit).NotTo(BeNil())
+		Expect(*createdJob.Spec.BackoffLimit).To(Equal(int32(3)))
+		Expect(createdJob.Spec.Template.Spec.RestartPolicy).To(Equal(corev1.RestartPolicyOnFailure))
+		container := createdJob.Spec.Template.Spec.Containers[0]
+		Expect(container.Name).To(Equal("downloader"))
+		Expect(container.Image).To(Equal(downloader.DefaultDownloaderImage))
+		Expect(container.Env).To(ContainElements(
+			corev1.EnvVar{Name: "HF_REPO", Value: "org/model"},
+			corev1.EnvVar{Name: "SOURCE_TYPE", Value: "huggingface"},
+			corev1.EnvVar{Name: "TARGET_PATH", Value: "/model"},
+			corev1.EnvVar{Name: "MODELCACHE_NAME", Value: resourceName},
+			corev1.EnvVar{Name: "MODELCACHE_NAMESPACE", Value: namespace},
+			corev1.EnvVar{Name: "HF_REVISION", Value: "main"},
+		))
+		Expect(container.VolumeMounts).To(ContainElement(corev1.VolumeMount{Name: "model-storage", MountPath: "/model"}))
+		Expect(createdJob.Spec.Template.Spec.Volumes).To(ContainElement(corev1.Volume{
+			Name:         "model-storage",
+			VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: downloader.PVCNameForModelCache(resourceName)}},
+		}))
+		Expect(createdJob.OwnerReferences).NotTo(BeEmpty())
+		Expect(createdJob.OwnerReferences[0].Kind).To(Equal("ModelCache"))
+	})
+
+	It("does not create a job when the pvc is pending", func() {
+		pvc := &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      downloader.PVCNameForModelCache(resourceName),
+				Namespace: namespace,
+				Labels:    downloader.ModelCacheLabels(resourceName),
+			},
+			Spec: validPVCSpec(),
+		}
+		Expect(k8sClient.Create(ctx, pvc)).To(Succeed())
+
+		controllerReconciler := &ModelCacheReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+		_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+		Expect(err).NotTo(HaveOccurred())
+
+		job := &batchv1.Job{}
+		err = k8sClient.Get(ctx, types.NamespacedName{Name: downloader.JobNameForModelCache(resourceName), Namespace: namespace}, job)
+		Expect(errors.IsNotFound(err)).To(BeTrue())
+	})
+
+	It("returns an error when an existing pvc is not managed by praesto", func() {
+		pvc := &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{Name: downloader.PVCNameForModelCache(resourceName), Namespace: namespace},
+			Spec:       validPVCSpec(),
+		}
+		Expect(k8sClient.Create(ctx, pvc)).To(Succeed())
+
+		controllerReconciler := &ModelCacheReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+		_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("not managed by praesto"))
 	})
 })
+
+func validPVCSpec() corev1.PersistentVolumeClaimSpec {
+	return corev1.PersistentVolumeClaimSpec{
+		AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+		Resources: corev1.VolumeResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceStorage: resource.MustParse("1Gi"),
+			},
+		},
+	}
+}

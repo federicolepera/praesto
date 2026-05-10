@@ -18,7 +18,12 @@ package controller
 
 import (
 	"context"
+	"time"
 
+	"github.com/federicolepera/praesto/internal/downloader"
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -36,6 +41,8 @@ type ModelCacheReconciler struct {
 // +kubebuilder:rbac:groups=praesto.praesto.io,resources=modelcaches,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=praesto.praesto.io,resources=modelcaches/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=praesto.praesto.io,resources=modelcaches/finalizers,verbs=update
+// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;delete
+// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -47,9 +54,32 @@ type ModelCacheReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.22.1/pkg/reconcile
 func (r *ModelCacheReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = logf.FromContext(ctx)
+	logger := logf.FromContext(ctx)
 
-	// TODO(user): your logic here
+	logger.Info("Reconciling ModelCache", "name", req.Name, "namespace", req.Namespace)
+
+	var modelCache praestov1alpha1.ModelCache
+	if err := r.Get(ctx, req.NamespacedName, &modelCache); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		logger.Error(err, "unable to fetch ModelCache")
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	pvc, err := downloader.EnsureModelCachePVC(ctx, r.Client, r.Scheme, &modelCache)
+	if err != nil {
+		logger.Error(err, "unable to ensure PVC for ModelCache")
+		return ctrl.Result{}, err
+	}
+
+	if pvc.Status.Phase != corev1.ClaimBound {
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	if _, err := downloader.EnsureDownloadJob(ctx, r.Client, r.Scheme, &modelCache, pvc); err != nil {
+		return ctrl.Result{}, err
+	}
 
 	return ctrl.Result{}, nil
 }
@@ -58,6 +88,8 @@ func (r *ModelCacheReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 func (r *ModelCacheReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&praestov1alpha1.ModelCache{}).
+		Owns(&corev1.PersistentVolumeClaim{}).
+		Owns(&batchv1.Job{}).
 		Named("modelcache").
 		Complete(r)
 }
