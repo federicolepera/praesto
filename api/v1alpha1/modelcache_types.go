@@ -30,9 +30,9 @@ type Token struct {
 	SecretRef SecretRef `json:"secretRef,omitempty"`
 }
 type HuggingfaceSource struct {
-	Repo   string `json:"repo"`
+	Repo     string `json:"repo"`
 	Revision string `json:"revision,omitempty"`
-	Token Token `json:"token,omitempty"`
+	Token    Token  `json:"token,omitempty"`
 }
 type Source struct {
 	Huggingface HuggingfaceSource `json:"huggingface,omitempty"`
@@ -40,8 +40,9 @@ type Source struct {
 
 type Storage struct {
 	StorageClassName string `json:"storageClassName,omitempty"`
-	Size string `json:"size,omitempty"`
+	Size             string `json:"size,omitempty"`
 }
+
 // ModelCacheSpec defines the desired state of ModelCache
 type ModelCacheSpec struct {
 	Source Source `json:"source"`
@@ -49,31 +50,32 @@ type ModelCacheSpec struct {
 	Storage Storage `json:"storage"`
 }
 
+const (
+	ModelCachePhaseReady       = "Ready"
+	ModelCachePhaseDownloading = "Downloading"
+	ModelCachePhaseFailed      = "Failed"
+	ModelCachePhasePending     = "Pending"
+)
+
 // ModelCacheStatus defines the observed state of ModelCache.
 type ModelCacheStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	Phase           string `json:"phase,omitempty"`
+	PvcName         string `json:"pvcName,omitempty"`
+	DownloadJobName string `json:"downloadJobName,omitempty"`
 
-	// For Kubernetes API conventions, see:
-	// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
-
-	// conditions represent the current state of the ModelCache resource.
-	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
-	//
-	// Standard condition types include:
-	// - "Available": the resource is fully functional
-	// - "Progressing": the resource is being created or updated
-	// - "Degraded": the resource failed to reach or maintain its desired state
-	//
-	// The status of each condition is one of True, False, or Unknown.
+	// Conditions represent the latest available observations of the ModelCache state.
+	// +patchMergeKey=type
+	// +patchStrategy=merge
 	// +listType=map
 	// +listMapKey=type
-	// +optional
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="PVC",type=string,JSONPath=`.status.pvcName`
+// +kubebuilder:printcolumn:name="Download Job",type=string,JSONPath=`.status.downloadJobName`
 
 // ModelCache is the Schema for the modelcaches API
 type ModelCache struct {

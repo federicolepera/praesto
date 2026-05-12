@@ -18,18 +18,21 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/federicolepera/praesto/internal/downloader"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	praestov1alpha1 "github.com/federicolepera/praesto/api/v1alpha1"
+	"github.com/federicolepera/praesto/internal/status"
 )
 
 // ModelCacheReconciler reconciles a ModelCache object
@@ -67,6 +70,10 @@ func (r *ModelCacheReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	if modelCache.Status.Phase == praestov1alpha1.ModelCachePhaseReady {
+		return ctrl.Result{}, nil
+	}
+
 	pvc, err := downloader.EnsureModelCachePVC(ctx, r.Client, r.Scheme, &modelCache)
 	if err != nil {
 		logger.Error(err, "unable to ensure PVC for ModelCache")
@@ -74,13 +81,73 @@ func (r *ModelCacheReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	if pvc.Status.Phase != corev1.ClaimBound {
+		modelCache.Status.Phase = praestov1alpha1.ModelCachePhasePending
+		modelCache.Status.PvcName = pvc.Name
+		status.SetCondition(&modelCache, status.ConditionPVCReady, metav1.ConditionFalse, "PVCPending", fmt.Sprintf("PVC %s is not bound yet", pvc.Name))
+		status.SetCondition(&modelCache, status.ConditionDownloadComplete, metav1.ConditionFalse, "DownloadPending", "Download job has not started yet")
+		status.SetCondition(&modelCache, status.ConditionReady, metav1.ConditionFalse, "WaitingForPVC", "Model is waiting for PVC to be bound")
+		if err := status.Update(ctx, r.Client, &modelCache); err != nil {
+			logger.Error(err, "unable to update ModelCache status")
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	if _, err := downloader.EnsureDownloadJob(ctx, r.Client, r.Scheme, &modelCache, pvc); err != nil {
+	job, err := downloader.EnsureDownloadJob(ctx, r.Client, r.Scheme, &modelCache, pvc)
+	if err != nil {
+		logger.Error(err, "unable to ensure download Job for ModelCache")
+		modelCache.Status.Phase = praestov1alpha1.ModelCachePhaseFailed
+		modelCache.Status.PvcName = pvc.Name
+		status.SetCondition(&modelCache, status.ConditionPVCReady, metav1.ConditionTrue, "PVCBound", fmt.Sprintf("PVC %s is bound", pvc.Name))
+		status.SetCondition(&modelCache, status.ConditionDownloadComplete, metav1.ConditionFalse, "JobCreateFailed", err.Error())
+		status.SetCondition(&modelCache, status.ConditionReady, metav1.ConditionFalse, "DownloadFailed", "Model is not ready because download job could not be created")
+		if job != nil {
+			modelCache.Status.DownloadJobName = job.Name
+		}
+		if err := status.Update(ctx, r.Client, &modelCache); err != nil {
+			logger.Error(err, "unable to update ModelCache status")
+		}
 		return ctrl.Result{}, err
 	}
 
+	jobStatus, err := downloader.IsDownloadJobComplete(job)
+	if err != nil {
+		logger.Error(err, "error checking download Job status for ModelCache")
+		modelCache.Status.Phase = praestov1alpha1.ModelCachePhaseFailed
+		modelCache.Status.PvcName = pvc.Name
+		modelCache.Status.DownloadJobName = job.Name
+		status.SetCondition(&modelCache, status.ConditionPVCReady, metav1.ConditionTrue, "PVCBound", fmt.Sprintf("PVC %s is bound", pvc.Name))
+		status.SetCondition(&modelCache, status.ConditionDownloadComplete, metav1.ConditionFalse, "JobFailed", err.Error())
+		status.SetCondition(&modelCache, status.ConditionReady, metav1.ConditionFalse, "DownloadFailed", "Model is not ready because download job failed")
+		if updateErr := status.Update(ctx, r.Client, &modelCache); updateErr != nil {
+			logger.Error(updateErr, "unable to update ModelCache status")
+		}
+		return ctrl.Result{}, err
+	}
+
+	if jobStatus {
+		modelCache.Status.Phase = praestov1alpha1.ModelCachePhaseReady
+		modelCache.Status.PvcName = pvc.Name
+		modelCache.Status.DownloadJobName = job.Name
+		status.SetCondition(&modelCache, status.ConditionPVCReady, metav1.ConditionTrue, "PVCBound", fmt.Sprintf("PVC %s is bound", pvc.Name))
+		status.SetCondition(&modelCache, status.ConditionDownloadComplete, metav1.ConditionTrue, "JobSucceeded", "Download job completed successfully")
+		status.SetCondition(&modelCache, status.ConditionReady, metav1.ConditionTrue, "ModelReady", "Model is ready to be mounted")
+		if err := status.Update(ctx, r.Client, &modelCache); err != nil {
+			logger.Error(err, "unable to update ModelCache status")
+			return ctrl.Result{}, err
+		}
+	} else {
+		modelCache.Status.Phase = praestov1alpha1.ModelCachePhaseDownloading
+		modelCache.Status.PvcName = pvc.Name
+		modelCache.Status.DownloadJobName = job.Name
+		status.SetCondition(&modelCache, status.ConditionPVCReady, metav1.ConditionTrue, "PVCBound", fmt.Sprintf("PVC %s is bound", pvc.Name))
+		status.SetCondition(&modelCache, status.ConditionDownloadComplete, metav1.ConditionFalse, "JobRunning", "Download job is still running")
+		status.SetCondition(&modelCache, status.ConditionReady, metav1.ConditionFalse, "Downloading", "Model is downloading")
+		if err := status.Update(ctx, r.Client, &modelCache); err != nil {
+			logger.Error(err, "unable to update ModelCache status")
+			return ctrl.Result{}, err
+		}
+	}
 	return ctrl.Result{}, nil
 }
 

@@ -210,6 +210,18 @@ func DownloadJobForModelCache(modelCache *praestov1alpha1.ModelCache, pvc *corev
 	return job
 }
 
+func IsDownloadJobComplete(job *batchv1.Job) (bool, error) {
+	for _, condition := range job.Status.Conditions {
+		if condition.Type == batchv1.JobComplete && condition.Status == corev1.ConditionTrue {
+			return true, nil
+		}
+		if condition.Type == batchv1.JobFailed && condition.Status == corev1.ConditionTrue {
+			return false, fmt.Errorf("download Job %s/%s failed: %s", job.Namespace, job.Name, condition.Message)
+		}
+	}
+
+	return false, nil
+}
 func ptrToInt64(value int64) *int64 { return &value }
 
 func ptrToInt32(value int32) *int32 { return &value }
