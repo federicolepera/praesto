@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	praestov1alpha1 "github.com/federicolepera/praesto/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
@@ -14,6 +15,7 @@ import (
 const (
 	ModelAnnotationKey     = "praesto.io/model-cache"
 	ModelPathAnnotationKey = "praesto.io/model-mount-path"
+	ModelContainerNameKey  = "praesto.io/target-container"
 	DefaultModelMountPath  = "/models"
 )
 
@@ -30,6 +32,7 @@ func (m *PodMutator) Handle(ctx context.Context, req admission.Request) admissio
 	}
 
 	modelCacheName, hasModelCacheAnnotation := pod.Annotations[ModelAnnotationKey]
+	modelCacheName = strings.TrimSpace(modelCacheName)
 	if !hasModelCacheAnnotation {
 		return admission.Allowed("no model cache annotation, skipping mutation")
 	}
@@ -37,9 +40,12 @@ func (m *PodMutator) Handle(ctx context.Context, req admission.Request) admissio
 		return admission.Errored(400, fmt.Errorf("model cache annotation is empty"))
 	}
 
-	modelMountPath := pod.Annotations[ModelPathAnnotationKey]
+	modelMountPath := strings.TrimSpace(pod.Annotations[ModelPathAnnotationKey])
 	if modelMountPath == "" {
 		modelMountPath = DefaultModelMountPath
+	}
+	if len(pod.Spec.Containers) == 0 {
+		return admission.Errored(400, fmt.Errorf("pod has no containers to mount model cache into"))
 	}
 
 	modelCache := &praestov1alpha1.ModelCache{}
@@ -57,6 +63,55 @@ func (m *PodMutator) Handle(ctx context.Context, req admission.Request) admissio
 
 	volumeName := "praesto-model-cache"
 
+	if err := ensureModelCacheVolume(pod, volumeName, pvcName); err != nil {
+		return admission.Errored(400, err)
+	}
+
+	targetContainerName, hasTargetContainerAnnotation := pod.Annotations[ModelContainerNameKey]
+	targetContainerName = strings.TrimSpace(targetContainerName)
+	if hasTargetContainerAnnotation {
+		if targetContainerName == "" {
+			return admission.Errored(400, fmt.Errorf("target container annotation is empty"))
+		}
+		found := false
+		for i, container := range pod.Spec.Containers {
+			if container.Name == targetContainerName {
+				if err := ensureModelCacheVolumeMount(&pod.Spec.Containers[i], volumeName, modelMountPath); err != nil {
+					return admission.Errored(400, err)
+				}
+				found = true
+				break
+			}
+		}
+		if !found {
+			return admission.Errored(400, fmt.Errorf("target container %s not found in pod", targetContainerName))
+		}
+	} else {
+		if err := ensureModelCacheVolumeMount(&pod.Spec.Containers[0], volumeName, modelMountPath); err != nil {
+			return admission.Errored(400, err)
+		}
+	}
+
+	marshaledPod, err := json.Marshal(pod)
+	if err != nil {
+		return admission.Errored(500, fmt.Errorf("unable to marshal mutated pod: %w", err))
+	}
+	return admission.PatchResponseFromRaw(req.Object.Raw, marshaledPod)
+}
+
+func ensureModelCacheVolume(pod *corev1.Pod, volumeName, pvcName string) error {
+	for _, volume := range pod.Spec.Volumes {
+		if volume.Name != volumeName {
+			continue
+		}
+
+		pvc := volume.VolumeSource.PersistentVolumeClaim
+		if pvc == nil || pvc.ClaimName != pvcName || !pvc.ReadOnly {
+			return fmt.Errorf("volume %s already exists with a conflicting configuration", volumeName)
+		}
+		return nil
+	}
+
 	pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
 		Name: volumeName,
 		VolumeSource: corev1.VolumeSource{
@@ -66,20 +121,27 @@ func (m *PodMutator) Handle(ctx context.Context, req admission.Request) admissio
 			},
 		},
 	})
+	return nil
+}
 
-	// TODO: handle multiple containers and potential name conflicts
-	if len(pod.Spec.Containers) == 0 {
-		return admission.Errored(400, fmt.Errorf("pod has no containers to mount the model cache volume"))
+func ensureModelCacheVolumeMount(container *corev1.Container, volumeName, mountPath string) error {
+	for _, mount := range container.VolumeMounts {
+		if mount.Name == volumeName {
+			if mount.MountPath == mountPath && mount.ReadOnly {
+				return nil
+			}
+			return fmt.Errorf("container %s already has volume mount %s with a conflicting configuration", container.Name, volumeName)
+		}
+
+		if mount.MountPath == mountPath {
+			return fmt.Errorf("container %s already has a volume mounted at %s", container.Name, mountPath)
+		}
 	}
-	pod.Spec.Containers[0].VolumeMounts = append(pod.Spec.Containers[0].VolumeMounts, corev1.VolumeMount{
+
+	container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
 		Name:      volumeName,
-		MountPath: modelMountPath,
+		MountPath: mountPath,
 		ReadOnly:  true,
 	})
-
-	marshaledPod, err := json.Marshal(pod)
-	if err != nil {
-		return admission.Errored(500, fmt.Errorf("unable to marshal mutated pod: %w", err))
-	}
-	return admission.PatchResponseFromRaw(req.Object.Raw, marshaledPod)
+	return nil
 }
