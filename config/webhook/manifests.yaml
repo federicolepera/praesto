@@ -1,26 +1,26 @@
+---
 apiVersion: admissionregistration.k8s.io/v1
-kind: MutatingWebhookConfiguration
+kind: ValidatingWebhookConfiguration
 metadata:
-  name: mutating-webhook-configuration
-  annotations:
-    cert-manager.io/inject-ca-from: system/serving-cert
+  name: validating-webhook-configuration
 webhooks:
-- name: mpod.praesto.io
-  admissionReviewVersions:
+- admissionReviewVersions:
   - v1
   clientConfig:
     service:
       name: webhook-service
       namespace: system
-      path: /mutate-v1-pod
+      path: /validate-praesto-praesto-io-v1alpha1-modelcache
   failurePolicy: Fail
+  name: vmodelcache-v1alpha1.kb.io
   rules:
   - apiGroups:
-    - ""
+    - praesto.praesto.io
     apiVersions:
-    - v1
+    - v1alpha1
     operations:
     - CREATE
+    - UPDATE
     resources:
-    - pods
+    - modelcaches
   sideEffects: None
