@@ -102,21 +102,32 @@ lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 lint-config: golangci-lint ## Verify golangci-lint linter configuration
 	$(GOLANGCI_LINT) config verify
 
-.PHONY: mutatingwebhook
-mutatingwebhook: ## Generate local TLS certs and install the debug MutatingWebhookConfiguration.
-	./hack/local-mutating-webhook.sh install
-
-.PHONY: mutatingwebhook-certs
-mutatingwebhook-certs: ## Generate local TLS certs for the debug webhook server.
+.PHONY: certs-create
+certs-create: ## Generate local TLS certs for webhook debugging.
 	./hack/local-mutating-webhook.sh certs
+
+.PHONY: mutatingwebhook
+mutatingwebhook: ## Install the local debug MutatingWebhookConfiguration.
+	./hack/local-mutating-webhook.sh mutating
+
+.PHONY: validatewebhook
+validatewebhook: ## Install the local debug ValidatingWebhookConfiguration for ModelCache.
+	./hack/local-mutating-webhook.sh validating
 
 .PHONY: mutatingwebhook-manifest
 mutatingwebhook-manifest: ## Print the local debug MutatingWebhookConfiguration manifest.
-	./hack/local-mutating-webhook.sh manifest
+	./hack/local-mutating-webhook.sh mutating-manifest
+
+.PHONY: validatingwebhook-manifest
+validatingwebhook-manifest: ## Print the local debug ValidatingWebhookConfiguration manifest.
+	./hack/local-mutating-webhook.sh validating-manifest
 
 .PHONY: mutatingwebhook-delete
-mutatingwebhook-delete: ## Delete the local debug MutatingWebhookConfiguration.
+mutatingwebhook-delete: ## Delete local debug webhook configurations.
 	./hack/local-mutating-webhook.sh delete
+
+.PHONY: mutatingwebhook-certs
+mutatingwebhook-certs: certs-create ## Deprecated: use certs-create instead.
 
 ##@ Build
 
