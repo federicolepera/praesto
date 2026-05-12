@@ -14,7 +14,17 @@ spec:
     singular: modelcache
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.pvcName
+      name: PVC
+      type: string
+    - jsonPath: .status.downloadJobName
+      name: Download Job
+      type: string
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: ModelCache is the Schema for the modelcaches API
@@ -82,16 +92,8 @@ spec:
             description: status defines the observed state of ModelCache
             properties:
               conditions:
-                description: |-
-                  conditions represent the current state of the ModelCache resource.
-                  Each condition has a unique type and reflects the status of a specific aspect of the resource.
-
-                  Standard condition types include:
-                  - "Available": the resource is fully functional
-                  - "Progressing": the resource is being created or updated
-                  - "Degraded": the resource failed to reach or maintain its desired state
-
-                  The status of each condition is one of True, False, or Unknown.
+                description: Conditions represent the latest available observations
+                  of the ModelCache state.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -150,6 +152,12 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              downloadJobName:
+                type: string
+              phase:
+                type: string
+              pvcName:
+                type: string
             type: object
         required:
         - spec
