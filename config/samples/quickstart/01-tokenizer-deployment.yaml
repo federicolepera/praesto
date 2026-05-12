@@ -1,23 +1,23 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: praesto-webhook-test
+  name: praesto-tokenizer-test
   namespace: default
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: praesto-webhook-test
+      app: praesto-tokenizer-test
   template:
     metadata:
       labels:
-        app: praesto-webhook-test
+        app: praesto-tokenizer-test
       annotations:
         praesto.io/model-cache: tinyllama-test
         praesto.io/model-mount-path: /models
     spec:
       containers:
-      - name: test
+      - name: tokenizer-test
         image: python:3.11-slim
         command:
         - sh

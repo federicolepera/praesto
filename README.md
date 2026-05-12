@@ -3,7 +3,7 @@
 <hr />
 
 <p align="center">
-  <img src="docs/images/praesto.png" alt="SloK hero illustration" width="700" />
+  <img src="docs/images/praesto.png" alt="Praesto hero illustration" width="700" />
 </p>
 
 <p align="center">Kubernetes-native model cache operator for preparing and mounting AI models into workloads.</p>
@@ -18,30 +18,68 @@
   <a href="#what-praesto-does">What it does</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#modelcache-resources">ModelCache</a> ·
-  <a href="#mutating-webhook">Webhook</a> ·
+  <a href="#admission-webhooks">Webhooks</a> ·
+  <a href="#local-webhook-debugging">Debugging</a> ·
   <a href="#development">Development</a>
 </p>
 
 ## What Praesto does
 
 - Defines reusable model caches as Kubernetes custom resources.
-- Creates a PVC for each model cache.
-- Runs a downloader Job that prepares the model files into the PVC.
+- Creates a ReadWriteMany PVC for each `ModelCache`.
+- Runs a downloader Job that prepares model files into the PVC.
 - Tracks cache readiness through Kubernetes status fields and conditions.
-- Exposes model cache state directly with `kubectl get modelcache`.
 - Mutates annotated Pods to mount a ready model cache PVC automatically.
-- Keeps the official cluster installation based on Kustomize and cert-manager.
-- Provides a local debug workflow for testing the mutating webhook outside the cluster.
+- Provides a lightweight quick start workload that verifies the mounted model files.
+- Uses Kustomize and cert-manager for the official cluster installation.
+- Provides local webhook debug targets for running the manager from an IDE/debugger.
 
 ## Quick start
 
-Install the CRDs and controller manifests with Kustomize:
+The quick start validates the complete v0.1.0 flow:
+
+```text
+ModelCache → PVC → downloader Job → Ready status → annotated Deployment → mounted model files
+```
+
+### 1. Prerequisites
+
+You need:
+
+- a Kubernetes cluster
+- `kubectl`
+- cert-manager installed in the cluster
+- a StorageClass that supports `ReadWriteMany`
+
+The sample uses:
+
+```yaml
+storageClassName: standard
+```
+
+If your cluster uses a different RWX StorageClass, edit:
+
+```text
+config/samples/quickstart/00-modelcache-tinyllama.yaml
+```
+
+### 2. Install Praesto
+
+Install CRDs, RBAC, controller, webhook service, and cert-manager webhook certificates:
 
 ```bash
 kubectl apply -k config/default
 ```
 
-Create a `ModelCache`:
+Wait for the controller manager:
+
+```bash
+kubectl get pods -n praesto-system
+```
+
+### 3. Create a ModelCache
+
+The quick start creates a `ModelCache` for TinyLlama:
 
 ```yaml
 apiVersion: praesto.praesto.io/v1alpha1
@@ -51,31 +89,111 @@ metadata:
   namespace: default
 spec:
   source:
-    type: huggingface
-    model: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+    huggingface:
+      repo: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+      revision: main
   storage:
+    storageClassName: standard
     size: 10Gi
 ```
 
 Apply it:
 
 ```bash
-kubectl apply -f config/samples/k8s/modelCache.yaml
+kubectl apply -f config/samples/quickstart/00-modelcache-tinyllama.yaml
 ```
 
-Check status:
+Watch the lifecycle:
 
 ```bash
-kubectl get modelcache
-kubectl get modelcache tinyllama-test -o yaml
+kubectl get modelcache tinyllama-test -w
+```
+
+You can also inspect the generated PVC and Job:
+
+```bash
+kubectl get pvc
+kubectl get jobs
+kubectl get pods -l praesto.io/job-type=download
 ```
 
 When the cache is ready, Praesto exposes status similar to:
 
 ```text
-NAME             PHASE   PVC                    DOWNLOAD JOB
-tinyllama-test   Ready   praesto-tinyllama-test praesto-download-tinyllama-test
+NAME             PHASE   PVC                     DOWNLOAD JOB
+tinyllama-test   Ready   praesto-tinyllama-test  praesto-download-tinyllama-test
 ```
+
+### 4. Create a workload that uses the model cache
+
+Apply the tokenizer test Deployment:
+
+```bash
+kubectl apply -f config/samples/quickstart/01-tokenizer-deployment.yaml
+```
+
+The Deployment has these annotations:
+
+```yaml
+praesto.io/model-cache: tinyllama-test
+praesto.io/model-mount-path: /models
+```
+
+The mutating webhook uses them to mount the generated PVC read-only into the Pod.
+
+### 5. Verify that the mounted model works
+
+Check logs:
+
+```bash
+kubectl logs -l app=praesto-tokenizer-test -f
+```
+
+Expected output includes:
+
+```text
+Tokenizer loaded from /models
+{'input_ids': [...], 'attention_mask': [...]}
+```
+
+This test intentionally loads only the HuggingFace tokenizer. It is lightweight
+enough for local clusters such as minikube and proves that the workload can read
+valid model files from the Praesto-mounted cache.
+
+Inspect the mutated Pod if needed:
+
+```bash
+kubectl get pod -l app=praesto-tokenizer-test -o yaml
+```
+
+Open a shell in the container:
+
+```bash
+kubectl exec -it deploy/praesto-tokenizer-test -- /bin/sh
+ls -lah /models
+```
+
+### 6. Cleanup
+
+```bash
+kubectl delete -f config/samples/quickstart/01-tokenizer-deployment.yaml
+kubectl delete -f config/samples/quickstart/00-modelcache-tinyllama.yaml
+```
+
+## Samples
+
+Samples live under:
+
+```text
+config/samples/
+```
+
+Current quick start samples:
+
+| File | Purpose |
+|------|---------|
+| `config/samples/quickstart/00-modelcache-tinyllama.yaml` | Creates the TinyLlama `ModelCache` |
+| `config/samples/quickstart/01-tokenizer-deployment.yaml` | Creates a lightweight tokenizer workload that uses the cache |
 
 ## ModelCache resources
 
@@ -92,11 +210,12 @@ metadata:
   namespace: default
 spec:
   source:
-    type: huggingface
-    model: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+    huggingface:
+      repo: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+      revision: main
   storage:
-    size: 10Gi
     storageClassName: standard
+    size: 10Gi
 ```
 
 Praesto reconciles this resource by creating:
@@ -134,138 +253,61 @@ Current conditions:
 | `DownloadComplete` | The downloader Job completed successfully |
 | `Ready` | The model cache is ready to be mounted by workloads |
 
-## Mutating webhook
+## Admission webhooks
 
-Praesto includes a mutating webhook that injects a ready model cache into Pods.
+Praesto uses admission webhooks for two workflows.
 
-Annotate a Pod or Pod template with:
+### Mutating Pod webhook
 
-```yaml
-metadata:
-  annotations:
-    praesto.io/model-cache: tinyllama-test
-    praesto.io/model-mount-path: /models
-```
+The mutating webhook injects a ready model cache into annotated Pods.
 
-Example Deployment:
+Required annotation:
 
 ```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: praesto-webhook-test
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: praesto-webhook-test
-  template:
-    metadata:
-      labels:
-        app: praesto-webhook-test
-      annotations:
-        praesto.io/model-cache: tinyllama-test
-        praesto.io/model-mount-path: /models
-    spec:
-      containers:
-      - name: app
-        image: busybox:1.36
-        command:
-        - sleep
-        - "3600"
+praesto.io/model-cache: tinyllama-test
 ```
 
-Apply the sample:
+Optional annotation:
 
-```bash
-kubectl apply -f config/samples/k8s/deployment-webhook-test.yaml
+```yaml
+praesto.io/model-mount-path: /models
 ```
 
-Check the mutated Pod:
+If the mount path is omitted, Praesto uses `/models`.
 
-```bash
-kubectl get pod -l app=praesto-webhook-test -o yaml
-```
+The webhook:
 
-Open a shell in the container:
+- reads the requested `ModelCache` from the Pod namespace
+- requires the `ModelCache` to be `Ready`
+- injects the generated PVC as a read-only volume
+- mounts it into the first container at the configured path
 
-```bash
-kubectl exec -it <pod-name> -- /bin/sh
-```
+### Validating ModelCache webhook
 
-## Local webhook debugging
+The validating webhook checks simple `ModelCache` input errors on create/update:
 
-The official Kustomize installation uses cert-manager for webhook certificates.
-
-For local debugging, Praesto also provides a Make target that creates local TLS
-certificates and installs a `MutatingWebhookConfiguration` that points directly to
-your local debugger.
-
-Install the local debug webhook configuration:
-
-```bash
-make mutatingwebhook
-```
-
-This command only:
-
-- generates local `tls.crt` and `tls.key`
-- installs the correct `MutatingWebhookConfiguration` in the cluster
-- injects the generated certificate into `clientConfig.caBundle`
-
-It does not start the manager or debugger.
-
-Start the manager yourself with:
-
-```bash
---webhook-cert-path=$TMPDIR/k8s-webhook-server/serving-certs
-```
-
-The local webhook URL defaults to:
-
-```text
-https://host.docker.internal:9443/mutate-v1-pod
-```
-
-Useful targets:
-
-| Target | Description |
-|--------|-------------|
-| `make mutatingwebhook` | Generate certs and install the local debug webhook |
-| `make mutatingwebhook-certs` | Generate only local TLS certs |
-| `make mutatingwebhook-manifest` | Print the local webhook manifest |
-| `make mutatingwebhook-delete` | Delete the local debug webhook |
-
-You can override defaults:
-
-```bash
-WEBHOOK_HOST=localhost make mutatingwebhook
-WEBHOOK_PORT=9443 make mutatingwebhook
-WEBHOOK_CERT_DIR=/tmp/praesto-certs make mutatingwebhook
-```
-
-When finished:
-
-```bash
-make mutatingwebhook-delete
-```
+- `spec.storage.storageClassName` is required
+- `spec.storage.size` is required
+- `spec.storage.size` must be a valid Kubernetes quantity greater than zero
+- `spec.source.huggingface.repo` is required
+- HuggingFace token `secretRef.name` and `secretRef.key` must be configured together
 
 ## Installation options
 
 ### Kustomize
 
-For a cluster installation:
+The official cluster installation path is Kustomize:
 
 ```bash
 kubectl apply -k config/default
 ```
 
-The Kustomize installation is the official path and uses cert-manager for webhook
-certificates.
+This path expects cert-manager to be installed because Praesto uses admission
+webhooks.
 
-### Local development
+### Local development without webhooks
 
-Install CRDs:
+Install only the CRDs:
 
 ```bash
 make install
@@ -277,13 +319,70 @@ Run the controller locally against your current kubeconfig:
 make run
 ```
 
-For webhook debugging, install the local webhook configuration first:
+## Local webhook debugging
+
+For webhook debugging, run the manager locally from your IDE/debugger and install
+webhook configurations that point directly to your local machine instead of the
+in-cluster webhook Service.
+
+Create local certificates:
+
+```bash
+make certs-create
+```
+
+Start the manager/debugger with:
+
+```bash
+--webhook-cert-path=$TMPDIR/k8s-webhook-server/serving-certs
+```
+
+Install the local mutating webhook configuration:
 
 ```bash
 make mutatingwebhook
 ```
 
-Then start your debugger with the generated certificate directory.
+Install the local validating webhook configuration:
+
+```bash
+make validatewebhook
+```
+
+Defaults:
+
+| Setting | Default |
+|---------|---------|
+| Webhook host | `host.docker.internal` |
+| Webhook port | `9443` |
+| Mutating path | `/mutate-v1-pod` |
+| Validating path | `/validate-praesto-praesto-io-v1alpha1-modelcache` |
+| Cert directory | `$TMPDIR/k8s-webhook-server/serving-certs` |
+
+Useful targets:
+
+| Target | Description |
+|--------|-------------|
+| `make certs-create` | Generate local TLS certs only |
+| `make mutatingwebhook` | Install the local debug `MutatingWebhookConfiguration` |
+| `make validatewebhook` | Install the local debug `ValidatingWebhookConfiguration` |
+| `make mutatingwebhook-manifest` | Print the local mutating webhook manifest |
+| `make validatingwebhook-manifest` | Print the local validating webhook manifest |
+| `make mutatingwebhook-delete` | Delete local debug webhook configurations |
+
+Override defaults if needed:
+
+```bash
+WEBHOOK_HOST=localhost make mutatingwebhook
+WEBHOOK_PORT=9443 make validatewebhook
+WEBHOOK_CERT_DIR=/tmp/praesto-certs make certs-create
+```
+
+Cleanup local webhook configurations:
+
+```bash
+make mutatingwebhook-delete
+```
 
 ## Requirements
 
@@ -291,7 +390,7 @@ Then start your debugger with the generated certificate directory.
 |-------------|-------|
 | Kubernetes 1.20+ | CRDs, Jobs, PVCs, and admission webhooks |
 | cert-manager | Required by the official Kustomize webhook installation |
-| A ReadWriteMany-capable StorageClass | Required for sharing model caches across workloads |
+| ReadWriteMany-capable StorageClass | Required for sharing model caches across workloads |
 | kubectl | Required for local install and debug workflows |
 | OpenSSL | Required for local webhook certificate generation |
 
@@ -320,6 +419,9 @@ Useful development commands:
 # Generate manifests and CRDs
 make manifests
 
+# Generate deepcopy code
+make generate
+
 # Install CRDs into the current cluster
 make install
 
@@ -337,9 +439,10 @@ make undeploy
 
 - Praesto is currently early-stage and focused on the v0.1.0 workflow.
 - The downloader flow is intentionally simple and may change.
+- The mutating webhook currently mounts the cache into the first container only.
 - The mutating webhook expects a ready `ModelCache` in the same namespace as the Pod.
 - The official installation path currently uses Kustomize, not Helm.
-- Documentation is intentionally minimal for now and will be expanded later.
+- Storage must be provided by a user-managed RWX-capable StorageClass.
 
 ## License
 
