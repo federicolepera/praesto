@@ -33,10 +33,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
-	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	ctrlwebhook "sigs.k8s.io/controller-runtime/pkg/webhook"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	praestov1alpha1 "github.com/federicolepera/praesto/api/v1alpha1"
 	"github.com/federicolepera/praesto/internal/controller"
+	praestowebhook "github.com/federicolepera/praesto/internal/webhook"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -104,7 +106,7 @@ func main() {
 
 	// Initial webhook TLS options
 	webhookTLSOpts := tlsOpts
-	webhookServerOptions := webhook.Options{
+	webhookServerOptions := ctrlwebhook.Options{
 		TLSOpts: webhookTLSOpts,
 	}
 
@@ -117,7 +119,7 @@ func main() {
 		webhookServerOptions.KeyName = webhookCertKey
 	}
 
-	webhookServer := webhook.NewServer(webhookServerOptions)
+	webhookServer := ctrlwebhook.NewServer(webhookServerOptions)
 
 	// Metrics endpoint is enabled in 'config/default/kustomization.yaml'. The Metrics options configure the server.
 	// More info:
@@ -185,6 +187,13 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "ModelCache")
 		os.Exit(1)
 	}
+
+	mgr.GetWebhookServer().Register("/mutate-v1-pod", &ctrlwebhook.Admission{
+		Handler: &praestowebhook.PodMutator{
+			Client:  mgr.GetClient(),
+			Decoder: admission.NewDecoder(mgr.GetScheme()),
+		},
+	})
 	// +kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
