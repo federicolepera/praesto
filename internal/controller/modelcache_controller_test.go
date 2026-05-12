@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/federicolepera/praesto/internal/downloader"
 	batchv1 "k8s.io/api/batch/v1"
@@ -26,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/rand"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -35,13 +37,16 @@ import (
 )
 
 var _ = Describe("ModelCache Controller", func() {
-	const resourceName = "test-resource"
 	const namespace = "default"
 
 	ctx := context.Background()
-	typeNamespacedName := types.NamespacedName{Name: resourceName, Namespace: namespace}
+	var resourceName string
+	var typeNamespacedName types.NamespacedName
 
 	BeforeEach(func() {
+		resourceName = fmt.Sprintf("test-resource-%s", rand.String(8))
+		typeNamespacedName = types.NamespacedName{Name: resourceName, Namespace: namespace}
+
 		mc := &praestov1alpha1.ModelCache{
 			ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: namespace},
 			Spec: praestov1alpha1.ModelCacheSpec{
