@@ -17,6 +17,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
+const testModelCacheVolumeName = "praesto-model-cache"
+
 func TestPodMutatorHandle(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
@@ -92,7 +94,7 @@ func TestPodMutatorHandle(t *testing.T) {
 
 		assertAllowed(t, resp)
 		assertModelVolume(t, mutatedPod, "praesto-tinyllama")
-		assertContainerMount(t, mutatedPod, "app", DefaultModelMountPath)
+		assertAppContainerMount(t, mutatedPod, DefaultModelMountPath)
 	})
 
 	t.Run("uses custom mount path", func(t *testing.T) {
@@ -103,7 +105,7 @@ func TestPodMutatorHandle(t *testing.T) {
 		resp, mutatedPod := handlePod(t, mutator, pod)
 
 		assertAllowed(t, resp)
-		assertContainerMount(t, mutatedPod, "app", "/mnt/model")
+		assertAppContainerMount(t, mutatedPod, "/mnt/model")
 	})
 
 	t.Run("mounts into first container when target container is omitted", func(t *testing.T) {
@@ -113,7 +115,7 @@ func TestPodMutatorHandle(t *testing.T) {
 		resp, mutatedPod := handlePod(t, mutator, pod)
 
 		assertAllowed(t, resp)
-		assertContainerMount(t, mutatedPod, "app", DefaultModelMountPath)
+		assertAppContainerMount(t, mutatedPod, DefaultModelMountPath)
 		assertContainerHasNoMount(t, mutatedPod, "sidecar")
 	})
 
@@ -126,7 +128,7 @@ func TestPodMutatorHandle(t *testing.T) {
 
 		assertAllowed(t, resp)
 		assertContainerHasNoMount(t, mutatedPod, "sidecar")
-		assertContainerMount(t, mutatedPod, "app", DefaultModelMountPath)
+		assertAppContainerMount(t, mutatedPod, DefaultModelMountPath)
 	})
 
 	t.Run("rejects empty target container annotation", func(t *testing.T) {
@@ -293,7 +295,7 @@ func annotatedPod(pod *corev1.Pod) *corev1.Pod {
 
 func modelCacheVolume(pvcName string, readOnly bool) corev1.Volume {
 	return corev1.Volume{
-		Name: "praesto-model-cache",
+		Name: testModelCacheVolumeName,
 		VolumeSource: corev1.VolumeSource{
 			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 				ClaimName: pvcName,
@@ -305,7 +307,7 @@ func modelCacheVolume(pvcName string, readOnly bool) corev1.Volume {
 
 func modelCacheMount(mountPath string, readOnly bool) corev1.VolumeMount {
 	return corev1.VolumeMount{
-		Name:      "praesto-model-cache",
+		Name:      testModelCacheVolumeName,
 		MountPath: mountPath,
 		ReadOnly:  readOnly,
 	}
@@ -331,7 +333,7 @@ func assertRejected(t *testing.T, resp admission.Response, expectedMessage strin
 func assertModelVolume(t *testing.T, pod *corev1.Pod, pvcName string) {
 	t.Helper()
 	for _, volume := range pod.Spec.Volumes {
-		if volume.Name != "praesto-model-cache" {
+		if volume.Name != testModelCacheVolumeName {
 			continue
 		}
 		if volume.PersistentVolumeClaim == nil {
@@ -345,11 +347,12 @@ func assertModelVolume(t *testing.T, pod *corev1.Pod, pvcName string) {
 	t.Fatalf("expected model cache volume")
 }
 
-func assertContainerMount(t *testing.T, pod *corev1.Pod, containerName, mountPath string) {
+func assertAppContainerMount(t *testing.T, pod *corev1.Pod, mountPath string) {
 	t.Helper()
+	const containerName = "app"
 	container := findContainer(t, pod, containerName)
 	for _, mount := range container.VolumeMounts {
-		if mount.Name == "praesto-model-cache" && mount.MountPath == mountPath && mount.ReadOnly {
+		if mount.Name == testModelCacheVolumeName && mount.MountPath == mountPath && mount.ReadOnly {
 			return
 		}
 	}
@@ -360,7 +363,7 @@ func assertContainerHasNoMount(t *testing.T, pod *corev1.Pod, containerName stri
 	t.Helper()
 	container := findContainer(t, pod, containerName)
 	for _, mount := range container.VolumeMounts {
-		if mount.Name == "praesto-model-cache" {
+		if mount.Name == testModelCacheVolumeName {
 			t.Fatalf("expected container %s not to mount model cache, got %#v", containerName, container.VolumeMounts)
 		}
 	}
