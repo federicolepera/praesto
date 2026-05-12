@@ -105,7 +105,7 @@ func ensureModelCacheVolume(pod *corev1.Pod, volumeName, pvcName string) error {
 			continue
 		}
 
-		pvc := volume.VolumeSource.PersistentVolumeClaim
+		pvc := volume.PersistentVolumeClaim
 		if pvc == nil || pvc.ClaimName != pvcName || !pvc.ReadOnly {
 			return fmt.Errorf("volume %s already exists with a conflicting configuration", volumeName)
 		}
