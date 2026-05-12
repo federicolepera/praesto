@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: praesto-webhook-test
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: praesto-webhook-test
+  template:
+    metadata:
+      labels:
+        app: praesto-webhook-test
+      annotations:
+        praesto.io/model-cache: tinyllama-test
+        praesto.io/model-mount-path: /models
+    spec:
+      containers:
+      - name: test
+        image: busybox:1.36
+        command:
+        - sh
+        - -c
+        - ls -la /models && sleep 3600

@@ -102,6 +102,22 @@ lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 lint-config: golangci-lint ## Verify golangci-lint linter configuration
 	$(GOLANGCI_LINT) config verify
 
+.PHONY: mutatingwebhook
+mutatingwebhook: ## Generate local TLS certs and install the debug MutatingWebhookConfiguration.
+	./hack/local-mutating-webhook.sh install
+
+.PHONY: mutatingwebhook-certs
+mutatingwebhook-certs: ## Generate local TLS certs for the debug webhook server.
+	./hack/local-mutating-webhook.sh certs
+
+.PHONY: mutatingwebhook-manifest
+mutatingwebhook-manifest: ## Print the local debug MutatingWebhookConfiguration manifest.
+	./hack/local-mutating-webhook.sh manifest
+
+.PHONY: mutatingwebhook-delete
+mutatingwebhook-delete: ## Delete the local debug MutatingWebhookConfiguration.
+	./hack/local-mutating-webhook.sh delete
+
 ##@ Build
 
 .PHONY: build
