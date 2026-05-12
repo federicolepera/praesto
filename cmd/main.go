@@ -39,6 +39,7 @@ import (
 	praestov1alpha1 "github.com/federicolepera/praesto/api/v1alpha1"
 	"github.com/federicolepera/praesto/internal/controller"
 	praestowebhook "github.com/federicolepera/praesto/internal/webhook"
+	webhookv1alpha1 "github.com/federicolepera/praesto/internal/webhook/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -194,6 +195,13 @@ func main() {
 			Decoder: admission.NewDecoder(mgr.GetScheme()),
 		},
 	})
+	// nolint:goconst
+	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+		if err := webhookv1alpha1.SetupModelCacheWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "ModelCache")
+			os.Exit(1)
+		}
+	}
 	// +kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
