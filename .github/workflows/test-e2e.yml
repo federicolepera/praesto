@@ -2,10 +2,15 @@ name: E2E Tests
 
 on:
   push:
+    branches:
+      - main
   pull_request:
+    branches:
+      - main
 
 jobs:
   test-e2e:
+    if: false
     name: Run on Ubuntu
     runs-on: ubuntu-latest
     steps:

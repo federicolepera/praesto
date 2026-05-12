@@ -2,8 +2,11 @@ name: Tests
 
 on:
   push:
+    branches:
+      - main
   pull_request:
-
+    branches:
+      - main
 jobs:
   test:
     name: Run on Ubuntu
