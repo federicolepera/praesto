@@ -271,16 +271,21 @@ Optional annotation:
 
 ```yaml
 praesto.io/model-mount-path: /models
+praesto.io/target-container: app
 ```
 
 If the mount path is omitted, Praesto uses `/models`.
+If the target container is omitted, Praesto mounts the cache into the first
+container in the Pod spec. For multi-container Pods, set
+`praesto.io/target-container` on the Pod template to choose the application
+container explicitly.
 
 The webhook:
 
 - reads the requested `ModelCache` from the Pod namespace
 - requires the `ModelCache` to be `Ready`
 - injects the generated PVC as a read-only volume
-- mounts it into the first container at the configured path
+- mounts it into the target container, or the first container when no target is configured
 
 ### Validating ModelCache webhook
 
@@ -439,7 +444,7 @@ make undeploy
 
 - Praesto is currently early-stage and focused on the v0.1.0 workflow.
 - The downloader flow is intentionally simple and may change.
-- The mutating webhook currently mounts the cache into the first container only.
+- Multi-container Pods should set `praesto.io/target-container`; otherwise the mutating webhook mounts the cache into the first container.
 - The mutating webhook expects a ready `ModelCache` in the same namespace as the Pod.
 - The official installation path currently uses Kustomize, not Helm.
 - Storage must be provided by a user-managed RWX-capable StorageClass.
