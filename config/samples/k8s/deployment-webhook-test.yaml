@@ -18,8 +18,32 @@ spec:
     spec:
       containers:
       - name: test
-        image: busybox:1.36
+        image: python:3.11-slim
         command:
         - sh
         - -c
-        - ls -la /models && sleep 3600
+        - |
+          set -eux
+
+          ls -la /models
+
+          pip install --no-cache-dir transformers sentencepiece
+
+          python - <<'PY'
+          from transformers import AutoTokenizer
+
+          tokenizer = AutoTokenizer.from_pretrained("/models", local_files_only=True)
+          tokens = tokenizer("Hello from Praesto")
+
+          print("Tokenizer loaded from /models")
+          print(tokens)
+          PY
+
+          sleep 3600
+        resources:
+          requests:
+            cpu: "250m"
+            memory: "512Mi"
+          limits:
+            cpu: "1"
+            memory: "1Gi"
