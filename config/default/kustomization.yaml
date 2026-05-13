@@ -54,6 +54,10 @@ patches:
   target:
     kind: Deployment
 
+- path: mutating_webhook_namespace_selector_patch.yaml
+  target:
+    kind: MutatingWebhookConfiguration
+
 # [CERTMANAGER] To enable cert-manager, uncomment all sections with 'CERTMANAGER' prefix.
 # Uncomment the following replacements to add the cert-manager CA injection annotations
 replacements:
