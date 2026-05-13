@@ -95,6 +95,10 @@ metadata:
 		cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
 		_, _ = utils.Run(cmd)
 
+		By("cleaning up the metrics ClusterRoleBinding")
+		cmd = exec.Command("kubectl", "delete", "clusterrolebinding", metricsRoleBindingName, "--ignore-not-found")
+		_, _ = utils.Run(cmd)
+
 		By("undeploying the controller-manager")
 		cmd = exec.Command("make", "undeploy")
 		_, _ = utils.Run(cmd)
@@ -179,7 +183,7 @@ metadata:
 				controllerPodName = podNames[0]
 				g.Expect(controllerPodName).To(ContainSubstring("controller-manager"))
 
-				// Validate the pod's status
+				// Validate the pod is running and ready.
 				cmd = exec.Command("kubectl", "get",
 					"pods", controllerPodName, "-o", "jsonpath={.status.phase}",
 					"-n", namespace,
@@ -187,21 +191,38 @@ metadata:
 				output, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(output).To(Equal("Running"), "Incorrect controller-manager pod status")
+
+				cmd = exec.Command("kubectl", "get",
+					"pods", controllerPodName, "-o", "jsonpath={.status.containerStatuses[0].ready}",
+					"-n", namespace,
+				)
+				output, err = utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("true"), "controller-manager container is not ready")
 			}
 			Eventually(verifyControllerUp).Should(Succeed())
 		})
 
 		It("should ensure the metrics endpoint is serving metrics", func() {
 			By("creating a ClusterRoleBinding for the service account to allow access to metrics")
-			cmd := exec.Command("kubectl", "create", "clusterrolebinding", metricsRoleBindingName,
-				"--clusterrole=praesto-metrics-reader",
-				fmt.Sprintf("--serviceaccount=%s:%s", namespace, serviceAccountName),
-			)
-			_, err := utils.Run(cmd)
+			_, err := kubectlApplyYAML(fmt.Sprintf(`
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: %s
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: praesto-metrics-reader
+subjects:
+- kind: ServiceAccount
+  name: %s
+  namespace: %s
+`, metricsRoleBindingName, serviceAccountName, namespace))
 			Expect(err).NotTo(HaveOccurred(), "Failed to create ClusterRoleBinding")
 
 			By("validating that the metrics service is available")
-			cmd = exec.Command("kubectl", "get", "service", metricsServiceName, "-n", namespace)
+			cmd := exec.Command("kubectl", "get", "service", metricsServiceName, "-n", namespace)
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Metrics service should exist")
 
@@ -309,7 +330,7 @@ spec:
       repo: ""
   storage:
     storageClassName: standard
-    size: 0
+    size: "0"
 `, workloadNamespace))
 
 			Expect(err).To(HaveOccurred(), "invalid ModelCache should be rejected")
