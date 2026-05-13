@@ -12,6 +12,8 @@ jobs:
   test-e2e:
     name: Run on Ubuntu
     runs-on: ubuntu-latest
+    env:
+      PROJECT_IMAGE: praesto:e2e-${{ github.sha }}
     steps:
       - name: Clone the code
         uses: actions/checkout@v4
