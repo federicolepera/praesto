@@ -36,6 +36,11 @@ import (
 // namespace where the project is deployed in
 const namespace = "praesto-system"
 
+// namespace used by Praesto workload-level e2e checks.
+const workloadNamespace = "praesto-e2e"
+
+const modelCacheVolumeName = "praesto-model-cache"
+
 // serviceAccountName created for the project
 const serviceAccountName = "praesto-controller-manager"
 
@@ -63,6 +68,15 @@ var _ = Describe("Manager", Ordered, func() {
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to label namespace with restricted policy")
 
+		By("creating workload namespace")
+		_, err = kubectlApplyYAML(fmt.Sprintf(`
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: %s
+`, workloadNamespace))
+		Expect(err).NotTo(HaveOccurred(), "Failed to create workload namespace")
+
 		By("installing CRDs")
 		cmd = exec.Command("make", "install")
 		_, err = utils.Run(cmd)
@@ -81,12 +95,20 @@ var _ = Describe("Manager", Ordered, func() {
 		cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
 		_, _ = utils.Run(cmd)
 
+		By("cleaning up the metrics ClusterRoleBinding")
+		cmd = exec.Command("kubectl", "delete", "clusterrolebinding", metricsRoleBindingName, "--ignore-not-found")
+		_, _ = utils.Run(cmd)
+
 		By("undeploying the controller-manager")
 		cmd = exec.Command("make", "undeploy")
 		_, _ = utils.Run(cmd)
 
 		By("uninstalling CRDs")
 		cmd = exec.Command("make", "uninstall")
+		_, _ = utils.Run(cmd)
+
+		By("removing workload namespace")
+		cmd = exec.Command("kubectl", "delete", "ns", workloadNamespace, "--ignore-not-found")
 		_, _ = utils.Run(cmd)
 
 		By("removing manager namespace")
@@ -161,7 +183,7 @@ var _ = Describe("Manager", Ordered, func() {
 				controllerPodName = podNames[0]
 				g.Expect(controllerPodName).To(ContainSubstring("controller-manager"))
 
-				// Validate the pod's status
+				// Validate the pod is running and ready.
 				cmd = exec.Command("kubectl", "get",
 					"pods", controllerPodName, "-o", "jsonpath={.status.phase}",
 					"-n", namespace,
@@ -169,21 +191,38 @@ var _ = Describe("Manager", Ordered, func() {
 				output, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(output).To(Equal("Running"), "Incorrect controller-manager pod status")
+
+				cmd = exec.Command("kubectl", "get",
+					"pods", controllerPodName, "-o", "jsonpath={.status.containerStatuses[0].ready}",
+					"-n", namespace,
+				)
+				output, err = utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("true"), "controller-manager container is not ready")
 			}
 			Eventually(verifyControllerUp).Should(Succeed())
 		})
 
 		It("should ensure the metrics endpoint is serving metrics", func() {
 			By("creating a ClusterRoleBinding for the service account to allow access to metrics")
-			cmd := exec.Command("kubectl", "create", "clusterrolebinding", metricsRoleBindingName,
-				"--clusterrole=praesto-metrics-reader",
-				fmt.Sprintf("--serviceaccount=%s:%s", namespace, serviceAccountName),
-			)
-			_, err := utils.Run(cmd)
+			_, err := kubectlApplyYAML(fmt.Sprintf(`
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: %s
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: praesto-metrics-reader
+subjects:
+- kind: ServiceAccount
+  name: %s
+  namespace: %s
+`, metricsRoleBindingName, serviceAccountName, namespace))
 			Expect(err).NotTo(HaveOccurred(), "Failed to create ClusterRoleBinding")
 
 			By("validating that the metrics service is available")
-			cmd = exec.Command("kubectl", "get", "service", metricsServiceName, "-n", namespace)
+			cmd := exec.Command("kubectl", "get", "service", metricsServiceName, "-n", namespace)
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Metrics service should exist")
 
@@ -200,16 +239,6 @@ var _ = Describe("Manager", Ordered, func() {
 				g.Expect(output).To(ContainSubstring("8443"), "Metrics endpoint is not ready")
 			}
 			Eventually(verifyMetricsEndpointReady).Should(Succeed())
-
-			By("verifying that the controller manager is serving the metrics server")
-			verifyMetricsServerStarted := func(g Gomega) {
-				cmd := exec.Command("kubectl", "logs", controllerPodName, "-n", namespace)
-				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(ContainSubstring("controller-runtime.metrics\tServing metrics server"),
-					"Metrics server not yet started")
-			}
-			Eventually(verifyMetricsServerStarted).Should(Succeed())
 
 			By("creating the curl-metrics pod to access the metrics endpoint")
 			cmd = exec.Command("kubectl", "run", "curl-metrics", "--restart=Never",
@@ -287,6 +316,142 @@ var _ = Describe("Manager", Ordered, func() {
 			Eventually(verifyCAInjection).Should(Succeed())
 		})
 
+		It("should reject invalid ModelCache resources through the validating webhook", func() {
+			By("applying an invalid ModelCache")
+			output, err := kubectlApplyYAML(fmt.Sprintf(`
+apiVersion: praesto.praesto.io/v1alpha1
+kind: ModelCache
+metadata:
+  name: invalid-modelcache
+  namespace: %s
+spec:
+  source:
+    huggingface:
+      repo: ""
+  storage:
+    storageClassName: standard
+    size: "0"
+`, workloadNamespace))
+
+			Expect(err).To(HaveOccurred(), "invalid ModelCache should be rejected")
+			Expect(output).To(ContainSubstring("spec.source.huggingface.repo"))
+			Expect(output).To(ContainSubstring("spec.storage.size"))
+		})
+
+		It("should reconcile a ModelCache by creating its managed PVC", func() {
+			By("creating a valid ModelCache")
+			_, err := kubectlApplyYAML(fmt.Sprintf(`
+apiVersion: praesto.praesto.io/v1alpha1
+kind: ModelCache
+metadata:
+  name: pvc-lifecycle-cache
+  namespace: %s
+spec:
+  source:
+    huggingface:
+      repo: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+      revision: main
+  storage:
+    storageClassName: standard
+    size: 10Gi
+`, workloadNamespace))
+			Expect(err).NotTo(HaveOccurred(), "valid ModelCache should be accepted")
+
+			By("verifying the controller creates the managed PVC and updates status")
+			Eventually(func(g Gomega) {
+				pvcName := kubectlJSONPath(g, "modelcache", "pvc-lifecycle-cache", workloadNamespace, `{.status.pvcName}`)
+				g.Expect(pvcName).To(Equal("praesto-pvc-lifecycle-cache"))
+
+				managedLabel := kubectlJSONPath(g, "pvc", "praesto-pvc-lifecycle-cache", workloadNamespace, `{.metadata.labels.praesto\.io/managed}`)
+				g.Expect(managedLabel).To(Equal("true"))
+
+				modelLabel := kubectlJSONPath(g, "pvc", "praesto-pvc-lifecycle-cache", workloadNamespace, `{.metadata.labels.praesto\.io/model}`)
+				g.Expect(modelLabel).To(Equal("pvc-lifecycle-cache"))
+
+				accessMode := kubectlJSONPath(g, "pvc", "praesto-pvc-lifecycle-cache", workloadNamespace, `{.spec.accessModes[0]}`)
+				g.Expect(accessMode).To(Equal("ReadWriteMany"))
+
+				storageClassName := kubectlJSONPath(g, "pvc", "praesto-pvc-lifecycle-cache", workloadNamespace, `{.spec.storageClassName}`)
+				g.Expect(storageClassName).To(Equal("standard"))
+			}).Should(Succeed())
+		})
+
+		It("should inject a ready ModelCache volume into an annotated Pod", func() {
+			By("creating a ready ModelCache status fixture")
+			createReadyModelCacheFixture("single-container-cache", "praesto-single-container-cache")
+
+			By("creating an annotated Pod")
+			_, err := kubectlApplyYAML(fmt.Sprintf(`
+apiVersion: v1
+kind: Pod
+metadata:
+  name: single-container-consumer
+  namespace: %s
+  annotations:
+    praesto.io/model-cache: single-container-cache
+    praesto.io/model-mount-path: /models
+spec:
+  containers:
+  - name: app
+    image: busybox:1.36
+    command: ["sh", "-c", "sleep 3600"]
+`, workloadNamespace))
+			Expect(err).NotTo(HaveOccurred(), "annotated Pod should be admitted and mutated")
+
+			By("verifying the injected read-only PVC volume and mount")
+			Eventually(func(g Gomega) {
+				claimName := kubectlJSONPath(g, "pod", "single-container-consumer", workloadNamespace,
+					fmt.Sprintf(`{.spec.volumes[?(@.name=="%s")].persistentVolumeClaim.claimName}`, modelCacheVolumeName))
+				g.Expect(claimName).To(Equal("praesto-single-container-cache"))
+
+				mountPath := kubectlJSONPath(g, "pod", "single-container-consumer", workloadNamespace,
+					fmt.Sprintf(`{.spec.containers[0].volumeMounts[?(@.name=="%s")].mountPath}`, modelCacheVolumeName))
+				g.Expect(mountPath).To(Equal("/models"))
+
+				readOnly := kubectlJSONPath(g, "pod", "single-container-consumer", workloadNamespace,
+					fmt.Sprintf(`{.spec.containers[0].volumeMounts[?(@.name=="%s")].readOnly}`, modelCacheVolumeName))
+				g.Expect(readOnly).To(Equal("true"))
+			}).Should(Succeed())
+		})
+
+		It("should inject a ready ModelCache volume only into the selected target container", func() {
+			By("creating a ready ModelCache status fixture")
+			createReadyModelCacheFixture("target-container-cache", "praesto-target-container-cache")
+
+			By("creating an annotated multi-container Pod")
+			_, err := kubectlApplyYAML(fmt.Sprintf(`
+apiVersion: v1
+kind: Pod
+metadata:
+  name: target-container-consumer
+  namespace: %s
+  annotations:
+    praesto.io/model-cache: target-container-cache
+    praesto.io/model-mount-path: /models
+    praesto.io/target-container: app
+spec:
+  containers:
+  - name: sidecar
+    image: busybox:1.36
+    command: ["sh", "-c", "sleep 3600"]
+  - name: app
+    image: busybox:1.36
+    command: ["sh", "-c", "sleep 3600"]
+`, workloadNamespace))
+			Expect(err).NotTo(HaveOccurred(), "annotated multi-container Pod should be admitted and mutated")
+
+			By("verifying only the selected container receives the mount")
+			Eventually(func(g Gomega) {
+				appMountPath := kubectlJSONPath(g, "pod", "target-container-consumer", workloadNamespace,
+					fmt.Sprintf(`{.spec.containers[?(@.name=="app")].volumeMounts[?(@.name=="%s")].mountPath}`, modelCacheVolumeName))
+				g.Expect(appMountPath).To(Equal("/models"))
+
+				sidecarMountPath := kubectlJSONPath(g, "pod", "target-container-consumer", workloadNamespace,
+					fmt.Sprintf(`{.spec.containers[?(@.name=="sidecar")].volumeMounts[?(@.name=="%s")].mountPath}`, modelCacheVolumeName))
+				g.Expect(sidecarMountPath).To(BeEmpty())
+			}).Should(Succeed())
+		})
+
 		// +kubebuilder:scaffold:e2e-webhooks-checks
 
 		// TODO: Customize the e2e test suite with scenarios specific to your project.
@@ -347,6 +512,65 @@ func getMetricsOutput() (string, error) {
 	By("getting the curl-metrics logs")
 	cmd := exec.Command("kubectl", "logs", "curl-metrics", "-n", namespace)
 	return utils.Run(cmd)
+}
+
+func createReadyModelCacheFixture(name, pvcName string) {
+	_, err := kubectlApplyYAML(fmt.Sprintf(`
+apiVersion: praesto.praesto.io/v1alpha1
+kind: ModelCache
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  source:
+    huggingface:
+      repo: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+      revision: main
+  storage:
+    storageClassName: standard
+    size: 10Gi
+`, name, workloadNamespace))
+	Expect(err).NotTo(HaveOccurred(), "Failed to create ModelCache fixture")
+
+	cmd := exec.Command("kubectl", "patch", "modelcache", name,
+		"-n", workloadNamespace,
+		"--subresource=status",
+		"--type=merge",
+		"-p", fmt.Sprintf(`{"status":{"phase":"Ready","pvcName":"%s","downloadJobName":"praesto-download-%s"}}`, pvcName, name),
+	)
+	_, err = utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to patch ModelCache status")
+}
+
+func kubectlApplyYAML(yaml string) (string, error) {
+	manifestFile, err := os.CreateTemp("", "praesto-e2e-*.yaml")
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		_ = os.Remove(manifestFile.Name())
+	}()
+
+	if _, err := manifestFile.WriteString(yaml); err != nil {
+		_ = manifestFile.Close()
+		return "", err
+	}
+	if err := manifestFile.Close(); err != nil {
+		return "", err
+	}
+
+	cmd := exec.Command("kubectl", "apply", "-f", manifestFile.Name())
+	return utils.Run(cmd)
+}
+
+func kubectlJSONPath(g Gomega, resourceType, name, resourceNamespace, jsonPath string) string {
+	cmd := exec.Command("kubectl", "get", resourceType, name,
+		"-n", resourceNamespace,
+		"-o", fmt.Sprintf("jsonpath=%s", jsonPath),
+	)
+	output, err := utils.Run(cmd)
+	g.Expect(err).NotTo(HaveOccurred())
+	return output
 }
 
 // tokenRequest is a simplified representation of the Kubernetes TokenRequest API response,

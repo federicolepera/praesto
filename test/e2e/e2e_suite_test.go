@@ -40,9 +40,9 @@ var (
 	// isCertManagerAlreadyInstalled will be set true when CertManager CRDs be found on the cluster
 	isCertManagerAlreadyInstalled = false
 
-	// projectImage is the name of the image which will be build and loaded
-	// with the code source changes to be tested.
-	projectImage = "example.com/praesto:v0.0.1"
+	// projectImage is the local image built from the checked-out code and loaded
+	// into the Kind cluster. It can be overridden with PROJECT_IMAGE.
+	projectImage = e2eProjectImage()
 )
 
 // TestE2E runs the end-to-end (e2e) test suite for the project. These tests execute in an isolated,
@@ -53,6 +53,14 @@ func TestE2E(t *testing.T) {
 	RegisterFailHandler(Fail)
 	_, _ = fmt.Fprintf(GinkgoWriter, "Starting praesto integration test suite\n")
 	RunSpecs(t, "e2e suite")
+}
+
+func e2eProjectImage() string {
+	if image := os.Getenv("PROJECT_IMAGE"); image != "" {
+		return image
+	}
+
+	return "praesto:e2e"
 }
 
 var _ = BeforeSuite(func() {

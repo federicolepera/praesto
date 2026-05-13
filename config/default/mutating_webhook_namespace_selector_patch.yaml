@@ -1,0 +1,10 @@
+- op: add
+  path: /webhooks/0/namespaceSelector
+  value:
+    matchExpressions:
+    - key: kubernetes.io/metadata.name
+      operator: NotIn
+      values:
+      - kube-system
+      - cert-manager
+      - praesto-system
