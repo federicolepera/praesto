@@ -10,7 +10,6 @@ on:
 
 jobs:
   test-e2e:
-    if: false
     name: Run on Ubuntu
     runs-on: ubuntu-latest
     steps:
