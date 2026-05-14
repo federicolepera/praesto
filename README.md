@@ -495,6 +495,8 @@ make undeploy
 
 - Praesto is currently early-stage and focused on the v0.1.0 workflow.
 - The downloader flow is intentionally simple and may change.
+- `ModelCache.spec` is immutable after creation. To change source, storage, or
+  downloader settings, delete and recreate the `ModelCache`.
 - Multi-container Pods should set `praesto.io/target-container`; otherwise the mutating webhook mounts the cache into the first container.
 - The mutating webhook expects a ready `ModelCache` in the same namespace as the Pod.
 - The mutating webhook only runs in namespaces labeled `praesto.io/model-cache-injection=enabled`.
