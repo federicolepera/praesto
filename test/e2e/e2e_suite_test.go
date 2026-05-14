@@ -42,7 +42,8 @@ var (
 
 	// projectImage is the local image built from the checked-out code and loaded
 	// into the Kind cluster. It can be overridden with PROJECT_IMAGE.
-	projectImage = e2eProjectImage()
+	projectImage    = e2eProjectImage()
+	downloaderImage = e2eDownloaderImage()
 )
 
 // TestE2E runs the end-to-end (e2e) test suite for the project. These tests execute in an isolated,
@@ -63,6 +64,14 @@ func e2eProjectImage() string {
 	return "praesto:e2e"
 }
 
+func e2eDownloaderImage() string {
+	if image := os.Getenv("DOWNLOADER_IMAGE"); image != "" {
+		return image
+	}
+
+	return "praesto/downloader:e2e"
+}
+
 var _ = BeforeSuite(func() {
 	By("building the manager(Operator) image")
 	cmd := exec.Command("make", "docker-build", fmt.Sprintf("IMG=%s", projectImage))
@@ -74,6 +83,19 @@ var _ = BeforeSuite(func() {
 	By("loading the manager(Operator) image on Kind")
 	err = utils.LoadImageToKindClusterWithName(projectImage)
 	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the manager(Operator) image into Kind")
+
+	By("building the downloader image")
+	containerTool := os.Getenv("CONTAINER_TOOL")
+	if containerTool == "" {
+		containerTool = "docker"
+	}
+	cmd = exec.Command(containerTool, "build", "-t", downloaderImage, "-f", "internal/downloader/Dockerfile", "internal/downloader")
+	_, err = utils.Run(cmd)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to build the downloader image")
+
+	By("loading the downloader image on Kind")
+	err = utils.LoadImageToKindClusterWithName(downloaderImage)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred(), "Failed to load the downloader image into Kind")
 
 	// The tests-e2e are intended to run on a temporary cluster that is created and destroyed for testing.
 	// To prevent errors when tests run in environments with CertManager already installed,

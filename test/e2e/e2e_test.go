@@ -121,15 +121,15 @@ metadata:
 		_, _ = utils.Run(cmd)
 
 		By("removing workload namespace")
-		cmd = exec.Command("kubectl", "delete", "ns", workloadNamespace, "--ignore-not-found")
+		cmd = exec.Command("kubectl", "delete", "ns", workloadNamespace, "--ignore-not-found", "--wait=false")
 		_, _ = utils.Run(cmd)
 
 		By("removing workload namespace without injection")
-		cmd = exec.Command("kubectl", "delete", "ns", workloadNamespaceWithoutInjection, "--ignore-not-found")
+		cmd = exec.Command("kubectl", "delete", "ns", workloadNamespaceWithoutInjection, "--ignore-not-found", "--wait=false")
 		_, _ = utils.Run(cmd)
 
 		By("removing manager namespace")
-		cmd = exec.Command("kubectl", "delete", "ns", namespace)
+		cmd = exec.Command("kubectl", "delete", "ns", namespace, "--wait=false")
 		_, _ = utils.Run(cmd)
 	})
 
@@ -154,6 +154,22 @@ metadata:
 				_, _ = fmt.Fprintf(GinkgoWriter, "Kubernetes events:\n%s", eventsOutput)
 			} else {
 				_, _ = fmt.Fprintf(GinkgoWriter, "Failed to get Kubernetes events: %s", err)
+			}
+
+			By("Fetching workload namespace diagnostics")
+			for _, args := range [][]string{
+				{"get", "modelcache,pvc,job,pod", "-n", workloadNamespace, "-o", "wide"},
+				{"get", "events", "-n", workloadNamespace, "--sort-by=.lastTimestamp"},
+				{"logs", "job/praesto-download-real-download-cache", "-n", workloadNamespace, "--all-containers=true"},
+				{"describe", "job", "praesto-download-real-download-cache", "-n", workloadNamespace},
+				{"describe", "pvc", "praesto-real-download-cache", "-n", workloadNamespace},
+				{"describe", "pod", "real-download-consumer", "-n", workloadNamespace},
+			} {
+				cmd = exec.Command("kubectl", args...)
+				output, err := utils.Run(cmd)
+				if err == nil {
+					_, _ = fmt.Fprintf(GinkgoWriter, "kubectl %v:\n%s\n", args, output)
+				}
 			}
 
 			By("Fetching curl-metrics logs")
@@ -391,6 +407,105 @@ spec:
 				storageClassName := kubectlJSONPath(g, "pvc", "praesto-pvc-lifecycle-cache", workloadNamespace, `{.spec.storageClassName}`)
 				g.Expect(storageClassName).To(Equal("standard"))
 			}).Should(Succeed())
+		})
+
+		It("should complete a real downloader flow and expose downloaded files to a consumer Pod", func() {
+			const (
+				modelCacheName = "real-download-cache"
+				pvcName        = "praesto-real-download-cache"
+				jobName        = "praesto-download-real-download-cache"
+				consumerPod    = "real-download-consumer"
+				pvName         = "praesto-e2e-real-download-cache"
+				storageClass   = "praesto-e2e-rwx"
+			)
+
+			By("creating a static RWX PersistentVolume for the real download PVC")
+			_, err := kubectlApplyYAML(fmt.Sprintf(`
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: %s
+spec:
+  capacity:
+    storage: 1Gi
+  accessModes:
+  - ReadWriteMany
+  storageClassName: %s
+  persistentVolumeReclaimPolicy: Delete
+  claimRef:
+    namespace: %s
+    name: %s
+  hostPath:
+    path: /tmp/%s
+    type: DirectoryOrCreate
+`, pvName, storageClass, workloadNamespace, pvcName, pvName))
+			Expect(err).NotTo(HaveOccurred(), "static RWX PV should be created")
+
+			By("creating a ModelCache that uses the e2e downloader image")
+			_, err = kubectlApplyYAML(fmt.Sprintf(`
+apiVersion: praesto.praesto.io/v1alpha1
+kind: ModelCache
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  source:
+    huggingface:
+      repo: hf-internal-testing/tiny-random-bert
+      revision: main
+  storage:
+    storageClassName: %s
+    size: 1Gi
+  downloader:
+    image: %s
+`, modelCacheName, workloadNamespace, storageClass, downloaderImage))
+			Expect(err).NotTo(HaveOccurred(), "real ModelCache should be accepted")
+
+			By("waiting for the PVC to bind")
+			Eventually(func(g Gomega) {
+				phase := kubectlJSONPath(g, "pvc", pvcName, workloadNamespace, `{.status.phase}`)
+				g.Expect(phase).To(Equal("Bound"))
+			}, 2*time.Minute).Should(Succeed())
+
+			By("waiting for the downloader Job to complete")
+			cmd := exec.Command("kubectl", "wait", "--for=condition=complete", "job/"+jobName,
+				"-n", workloadNamespace, "--timeout=10m")
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "downloader Job should complete")
+
+			By("waiting for ModelCache status to become Ready")
+			Eventually(func(g Gomega) {
+				phase := kubectlJSONPath(g, "modelcache", modelCacheName, workloadNamespace, `{.status.phase}`)
+				g.Expect(phase).To(Equal("Ready"))
+
+				statusPVCName := kubectlJSONPath(g, "modelcache", modelCacheName, workloadNamespace, `{.status.pvcName}`)
+				g.Expect(statusPVCName).To(Equal(pvcName))
+			}, 2*time.Minute).Should(Succeed())
+
+			By("creating a consumer Pod that reads a downloaded file from the injected volume")
+			_, err = kubectlApplyYAML(fmt.Sprintf(`
+apiVersion: v1
+kind: Pod
+metadata:
+  name: %s
+  namespace: %s
+  annotations:
+    praesto.io/model-cache: %s
+    praesto.io/model-mount-path: /models
+spec:
+  restartPolicy: Never
+  containers:
+  - name: app
+    image: busybox:1.36
+    command: ["sh", "-c", "test -f /models/config.json && test -f /models/.praesto-complete"]
+`, consumerPod, workloadNamespace, modelCacheName))
+			Expect(err).NotTo(HaveOccurred(), "consumer Pod should be admitted and mutated")
+
+			By("waiting for the consumer Pod to read the downloaded files successfully")
+			Eventually(func(g Gomega) {
+				phase := kubectlJSONPath(g, "pod", consumerPod, workloadNamespace, `{.status.phase}`)
+				g.Expect(phase).To(Equal("Succeeded"))
+			}, 2*time.Minute).Should(Succeed())
 		})
 
 		It("should inject a ready ModelCache volume into an annotated Pod", func() {

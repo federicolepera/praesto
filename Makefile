@@ -82,9 +82,14 @@ setup-test-e2e: ## Set up a Kind cluster for e2e tests if it does not exist
 	esac
 
 .PHONY: test-e2e
-test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expected an isolated environment using Kind.
+test-e2e: ## Run the e2e tests. Expected an isolated environment using Kind.
+	@set -e; \
+	trap 'status=$$?; $(MAKE) cleanup-test-e2e || true; exit $$status' EXIT; \
+	trap 'exit 130' INT; \
+	trap 'exit 143' TERM; \
+	$(MAKE) setup-test-e2e; \
+	$(MAKE) manifests generate fmt vet; \
 	KIND=$(KIND) KIND_CLUSTER=$(KIND_CLUSTER) go test -tags=e2e ./test/e2e/ -v -ginkgo.v
-	$(MAKE) cleanup-test-e2e
 
 .PHONY: cleanup-test-e2e
 cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
