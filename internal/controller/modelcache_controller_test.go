@@ -24,6 +24,7 @@ import (
 	"github.com/federicolepera/praesto/internal/status"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -42,11 +43,14 @@ var _ = Describe("ModelCache Controller", func() {
 
 	ctx := context.Background()
 	var resourceName string
+	var storageClassName string
 	var typeNamespacedName types.NamespacedName
 
 	BeforeEach(func() {
 		resourceName = fmt.Sprintf("test-resource-%s", rand.String(8))
+		storageClassName = fmt.Sprintf("%s-rwx", resourceName)
 		typeNamespacedName = types.NamespacedName{Name: resourceName, Namespace: namespace}
+		Expect(k8sClient.Create(ctx, testStorageClass(storageClassName))).To(Succeed())
 
 		mc := &praestov1alpha1.ModelCache{
 			ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: namespace},
@@ -57,7 +61,7 @@ var _ = Describe("ModelCache Controller", func() {
 					Token:    praestov1alpha1.Token{SecretRef: praestov1alpha1.SecretRef{Name: "hf-secret", Key: "token"}},
 				}},
 				Storage: praestov1alpha1.Storage{
-					StorageClassName: "fast-rwx",
+					StorageClassName: storageClassName,
 					Size:             "1Gi",
 				},
 			},
@@ -84,6 +88,11 @@ var _ = Describe("ModelCache Controller", func() {
 		if err := k8sClient.Get(ctx, typeNamespacedName, mc); err == nil {
 			Expect(k8sClient.Delete(ctx, mc)).To(Succeed())
 		}
+
+		storageClass := &storagev1.StorageClass{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: storageClassName}, storageClass); err == nil {
+			Expect(k8sClient.Delete(ctx, storageClass)).To(Succeed())
+		}
 	})
 
 	It("creates a pvc when it does not exist", func() {
@@ -98,7 +107,7 @@ var _ = Describe("ModelCache Controller", func() {
 
 		Expect(createdPVC.Spec.AccessModes).To(ContainElement(corev1.ReadWriteMany))
 		Expect(createdPVC.Spec.StorageClassName).NotTo(BeNil())
-		Expect(*createdPVC.Spec.StorageClassName).To(Equal("fast-rwx"))
+		Expect(*createdPVC.Spec.StorageClassName).To(Equal(storageClassName))
 		Expect(createdPVC.Spec.Resources.Requests[corev1.ResourceStorage]).To(Equal(resource.MustParse("1Gi")))
 		Expect(createdPVC.OwnerReferences).NotTo(BeEmpty())
 		Expect(createdPVC.OwnerReferences[0].Kind).To(Equal("ModelCache"))
@@ -173,6 +182,32 @@ var _ = Describe("ModelCache Controller", func() {
 		job := &batchv1.Job{}
 		err = k8sClient.Get(ctx, types.NamespacedName{Name: downloader.JobNameForModelCache(resourceName), Namespace: namespace}, job)
 		Expect(errors.IsNotFound(err)).To(BeTrue())
+
+		mc := &praestov1alpha1.ModelCache{}
+		Expect(k8sClient.Get(ctx, typeNamespacedName, mc)).To(Succeed())
+		Expect(pvcReadyConditionReason(mc.Status.Conditions)).To(Equal("PVCPending"))
+		Expect(pvcReadyConditionMessage(mc.Status.Conditions)).To(ContainSubstring("ReadWriteMany"))
+		Expect(pvcReadyConditionMessage(mc.Status.Conditions)).To(ContainSubstring(storageClassName))
+	})
+
+	It("marks a ModelCache failed when its StorageClass does not exist", func() {
+		storageClass := &storagev1.StorageClass{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: storageClassName}, storageClass)).To(Succeed())
+		Expect(k8sClient.Delete(ctx, storageClass)).To(Succeed())
+
+		controllerReconciler := &ModelCacheReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+		_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+		Expect(err).NotTo(HaveOccurred())
+
+		mc := &praestov1alpha1.ModelCache{}
+		Expect(k8sClient.Get(ctx, typeNamespacedName, mc)).To(Succeed())
+		Expect(mc.Status.Phase).To(Equal(praestov1alpha1.ModelCachePhaseFailed))
+		Expect(pvcReadyConditionReason(mc.Status.Conditions)).To(Equal("StorageClassNotFound"))
+		Expect(pvcReadyConditionMessage(mc.Status.Conditions)).To(ContainSubstring(storageClassName))
+
+		pvc := &corev1.PersistentVolumeClaim{}
+		err = k8sClient.Get(ctx, types.NamespacedName{Name: downloader.PVCNameForModelCache(resourceName), Namespace: namespace}, pvc)
+		Expect(errors.IsNotFound(err)).To(BeTrue())
 	})
 
 	It("returns an error when an existing pvc is not managed by praesto", func() {
@@ -198,7 +233,7 @@ var _ = Describe("ModelCache Controller", func() {
 		Expect(k8sClient.Get(ctx, typeNamespacedName, mc)).To(Succeed())
 		Expect(mc.Status.Phase).To(Equal(praestov1alpha1.ModelCachePhaseFailed))
 		Expect(mc.Status.PvcName).To(BeEmpty())
-		Expect(conditionReason(mc.Status.Conditions, status.ConditionPVCReady)).To(Equal("PVCLost"))
+		Expect(pvcReadyConditionReason(mc.Status.Conditions)).To(Equal("PVCLost"))
 	})
 
 	It("marks a ready ModelCache failed when its PVC is being deleted", func() {
@@ -226,7 +261,7 @@ var _ = Describe("ModelCache Controller", func() {
 		Expect(k8sClient.Get(ctx, typeNamespacedName, mc)).To(Succeed())
 		Expect(mc.Status.Phase).To(Equal(praestov1alpha1.ModelCachePhaseFailed))
 		Expect(mc.Status.PvcName).To(Equal(pvc.Name))
-		Expect(conditionReason(mc.Status.Conditions, status.ConditionPVCReady)).To(Equal("PVCDeleting"))
+		Expect(pvcReadyConditionReason(mc.Status.Conditions)).To(Equal("PVCDeleting"))
 
 		terminatingPVC := &corev1.PersistentVolumeClaim{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: pvc.Name, Namespace: namespace}, terminatingPVC)).To(Succeed())
@@ -246,6 +281,16 @@ func validPVCSpec() corev1.PersistentVolumeClaimSpec {
 	}
 }
 
+func testStorageClass(name string) *storagev1.StorageClass {
+	provisioner := "praesto.test/no-provisioner"
+	volumeBindingMode := storagev1.VolumeBindingImmediate
+	return &storagev1.StorageClass{
+		ObjectMeta:        metav1.ObjectMeta{Name: name},
+		Provisioner:       provisioner,
+		VolumeBindingMode: &volumeBindingMode,
+	}
+}
+
 func markModelCacheReady(ctx context.Context, key types.NamespacedName, pvcName string) *praestov1alpha1.ModelCache {
 	mc := &praestov1alpha1.ModelCache{}
 	Expect(k8sClient.Get(ctx, key, mc)).To(Succeed())
@@ -256,10 +301,20 @@ func markModelCacheReady(ctx context.Context, key types.NamespacedName, pvcName 
 	return mc
 }
 
-func conditionReason(conditions []metav1.Condition, conditionType string) string {
+func pvcReadyConditionReason(conditions []metav1.Condition) string {
 	for _, condition := range conditions {
-		if condition.Type == conditionType {
+		if condition.Type == status.ConditionPVCReady {
 			return condition.Reason
+		}
+	}
+
+	return ""
+}
+
+func pvcReadyConditionMessage(conditions []metav1.Condition) string {
+	for _, condition := range conditions {
+		if condition.Type == status.ConditionPVCReady {
+			return condition.Message
 		}
 	}
 

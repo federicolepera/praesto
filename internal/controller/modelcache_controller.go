@@ -24,6 +24,7 @@ import (
 	"github.com/federicolepera/praesto/internal/downloader"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -46,6 +47,7 @@ type ModelCacheReconciler struct {
 // +kubebuilder:rbac:groups=praesto.praesto.io,resources=modelcaches/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=praesto.praesto.io,resources=modelcaches/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;delete
+// +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
@@ -116,6 +118,25 @@ func (r *ModelCacheReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, nil
 	}
 
+	storageClassExists, err := r.ensureStorageClassExists(ctx, &modelCache)
+	if err != nil {
+		logger.Error(err, "unable to validate StorageClass for ModelCache")
+		return ctrl.Result{}, err
+	}
+	if !storageClassExists {
+		modelCache.Status.Phase = praestov1alpha1.ModelCachePhaseFailed
+		modelCache.Status.PvcName = ""
+		modelCache.Status.DownloadJobName = ""
+		status.SetCondition(&modelCache, status.ConditionPVCReady, metav1.ConditionFalse, "StorageClassNotFound", fmt.Sprintf("StorageClass %q does not exist", modelCache.Spec.Storage.StorageClassName))
+		status.SetCondition(&modelCache, status.ConditionDownloadComplete, metav1.ConditionFalse, "DownloadPending", "Download job has not started because storage provisioning failed")
+		status.SetCondition(&modelCache, status.ConditionReady, metav1.ConditionFalse, "StorageUnavailable", "Model is not ready because its StorageClass does not exist")
+		if err := status.Update(ctx, r.Client, &modelCache); err != nil {
+			logger.Error(err, "unable to update ModelCache status after StorageClass validation failed")
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
+	}
+
 	pvc, err := downloader.EnsureModelCachePVC(ctx, r.Client, r.Scheme, &modelCache)
 	if err != nil {
 		logger.Error(err, "unable to ensure PVC for ModelCache")
@@ -125,7 +146,7 @@ func (r *ModelCacheReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if pvc.Status.Phase != corev1.ClaimBound {
 		modelCache.Status.Phase = praestov1alpha1.ModelCachePhasePending
 		modelCache.Status.PvcName = pvc.Name
-		status.SetCondition(&modelCache, status.ConditionPVCReady, metav1.ConditionFalse, "PVCPending", fmt.Sprintf("PVC %s is not bound yet", pvc.Name))
+		status.SetCondition(&modelCache, status.ConditionPVCReady, metav1.ConditionFalse, "PVCPending", fmt.Sprintf("PVC %s is not bound yet; check that StorageClass %q can provision ReadWriteMany volumes", pvc.Name, modelCache.Spec.Storage.StorageClassName))
 		status.SetCondition(&modelCache, status.ConditionDownloadComplete, metav1.ConditionFalse, "DownloadPending", "Download job has not started yet")
 		status.SetCondition(&modelCache, status.ConditionReady, metav1.ConditionFalse, "WaitingForPVC", "Model is waiting for PVC to be bound")
 		if err := status.Update(ctx, r.Client, &modelCache); err != nil {
@@ -194,6 +215,31 @@ func (r *ModelCacheReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 }
 
 func (r *ModelCacheReconciler) readyPVCReader() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+
+	return r.Client
+}
+
+func (r *ModelCacheReconciler) ensureStorageClassExists(ctx context.Context, modelCache *praestov1alpha1.ModelCache) (bool, error) {
+	if modelCache.Spec.Storage.StorageClassName == "" {
+		return true, nil
+	}
+
+	storageClass := &storagev1.StorageClass{}
+	err := r.storageClassReader().Get(ctx, client.ObjectKey{Name: modelCache.Spec.Storage.StorageClassName}, storageClass)
+	if err == nil {
+		return true, nil
+	}
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+
+	return false, err
+}
+
+func (r *ModelCacheReconciler) storageClassReader() client.Reader {
 	if r.APIReader != nil {
 		return r.APIReader
 	}
