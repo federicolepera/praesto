@@ -41,6 +41,8 @@ const workloadNamespace = "praesto-e2e"
 
 const modelCacheVolumeName = "praesto-model-cache"
 
+const workloadNamespaceWithoutInjection = "praesto-e2e-no-injection"
+
 // serviceAccountName created for the project
 const serviceAccountName = "praesto-controller-manager"
 
@@ -74,8 +76,19 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: %s
+  labels:
+    praesto.io/model-cache-injection: enabled
 `, workloadNamespace))
 		Expect(err).NotTo(HaveOccurred(), "Failed to create workload namespace")
+
+		By("creating workload namespace without Praesto injection")
+		_, err = kubectlApplyYAML(fmt.Sprintf(`
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: %s
+`, workloadNamespaceWithoutInjection))
+		Expect(err).NotTo(HaveOccurred(), "Failed to create workload namespace without injection")
 
 		By("installing CRDs")
 		cmd = exec.Command("make", "install")
@@ -109,6 +122,10 @@ metadata:
 
 		By("removing workload namespace")
 		cmd = exec.Command("kubectl", "delete", "ns", workloadNamespace, "--ignore-not-found")
+		_, _ = utils.Run(cmd)
+
+		By("removing workload namespace without injection")
+		cmd = exec.Command("kubectl", "delete", "ns", workloadNamespaceWithoutInjection, "--ignore-not-found")
 		_, _ = utils.Run(cmd)
 
 		By("removing manager namespace")
@@ -449,6 +466,33 @@ spec:
 				sidecarMountPath := kubectlJSONPath(g, "pod", "target-container-consumer", workloadNamespace,
 					fmt.Sprintf(`{.spec.containers[?(@.name=="sidecar")].volumeMounts[?(@.name=="%s")].mountPath}`, modelCacheVolumeName))
 				g.Expect(sidecarMountPath).To(BeEmpty())
+			}).Should(Succeed())
+		})
+
+		It("should not call the mutating webhook in namespaces without injection enabled", func() {
+			By("creating an annotated Pod that references a missing ModelCache in a non-opt-in namespace")
+			_, err := kubectlApplyYAML(fmt.Sprintf(`
+apiVersion: v1
+kind: Pod
+metadata:
+  name: no-injection-consumer
+  namespace: %s
+  annotations:
+    praesto.io/model-cache: missing-cache
+    praesto.io/model-mount-path: /models
+spec:
+  containers:
+  - name: app
+    image: busybox:1.36
+    command: ["sh", "-c", "sleep 3600"]
+`, workloadNamespaceWithoutInjection))
+			Expect(err).NotTo(HaveOccurred(), "Pod in non-opt-in namespace should not be rejected by the mutating webhook")
+
+			By("verifying no Praesto volume was injected")
+			Eventually(func(g Gomega) {
+				claimName := kubectlJSONPath(g, "pod", "no-injection-consumer", workloadNamespaceWithoutInjection,
+					fmt.Sprintf(`{.spec.volumes[?(@.name=="%s")].persistentVolumeClaim.claimName}`, modelCacheVolumeName))
+				g.Expect(claimName).To(BeEmpty())
 			}).Should(Succeed())
 		})
 

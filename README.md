@@ -126,6 +126,14 @@ tinyllama-test   Ready   praesto-tinyllama-test  praesto-download-tinyllama-test
 
 ### 4. Create a workload that uses the model cache
 
+Enable Praesto Pod injection in the workload namespace:
+
+```bash
+kubectl label namespace default praesto.io/model-cache-injection=enabled
+```
+
+Praesto only calls the mutating Pod webhook in namespaces with this label.
+
 Apply the tokenizer test Deployment:
 
 ```bash
@@ -261,6 +269,15 @@ Praesto uses admission webhooks for two workflows.
 
 The mutating webhook injects a ready model cache into annotated Pods.
 
+Before creating annotated Pods, enable injection in the workload namespace:
+
+```bash
+kubectl label namespace <namespace> praesto.io/model-cache-injection=enabled
+```
+
+Namespaces without this label are ignored by the mutating webhook. This keeps
+unrelated workloads from depending on Praesto webhook availability.
+
 Required annotation:
 
 ```yaml
@@ -286,6 +303,10 @@ The webhook:
 - requires the `ModelCache` to be `Ready`
 - injects the generated PVC as a read-only volume
 - mounts it into the target container, or the first container when no target is configured
+
+The webhook uses `failurePolicy: Fail` inside opt-in namespaces. If Praesto is
+unavailable, annotated Pods in enabled namespaces are rejected instead of running
+without their model cache.
 
 ### Validating ModelCache webhook
 
@@ -346,6 +367,13 @@ Install the local mutating webhook configuration:
 
 ```bash
 make mutatingwebhook
+```
+
+The local mutating webhook uses the same namespace opt-in as the cluster
+installation. Label any namespace you want to debug:
+
+```bash
+kubectl label namespace <namespace> praesto.io/model-cache-injection=enabled
 ```
 
 Install the local validating webhook configuration:
@@ -446,6 +474,7 @@ make undeploy
 - The downloader flow is intentionally simple and may change.
 - Multi-container Pods should set `praesto.io/target-container`; otherwise the mutating webhook mounts the cache into the first container.
 - The mutating webhook expects a ready `ModelCache` in the same namespace as the Pod.
+- The mutating webhook only runs in namespaces labeled `praesto.io/model-cache-injection=enabled`.
 - The official installation path currently uses Kustomize, not Helm.
 - Storage must be provided by a user-managed RWX-capable StorageClass.
 

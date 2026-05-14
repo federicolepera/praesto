@@ -74,6 +74,9 @@ webhooks:
   - v1
   sideEffects: None
   failurePolicy: Fail
+  namespaceSelector:
+    matchLabels:
+      praesto.io/model-cache-injection: enabled
   clientConfig:
     url: https://${WEBHOOK_HOST}:${WEBHOOK_PORT}${MUTATING_WEBHOOK_PATH}
     caBundle: ${bundle}
