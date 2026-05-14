@@ -130,7 +130,10 @@ func TestDownloadJobForModelCache(t *testing.T) {
 	modelCache := testModelCache()
 	pvc := testPVC(modelCache)
 
-	job := DownloadJobForModelCache(modelCache, pvc)
+	job, err := DownloadJobForModelCache(modelCache, pvc)
+	if err != nil {
+		t.Fatalf("build Job: %v", err)
+	}
 
 	if job.Name != JobNameForModelCache(modelCache.Name) {
 		t.Fatalf("unexpected Job name: %s", job.Name)
@@ -160,6 +163,12 @@ func TestDownloadJobForModelCache(t *testing.T) {
 	if container.Image != DefaultDownloaderImage {
 		t.Fatalf("unexpected downloader image: %s", container.Image)
 	}
+	if len(container.Resources.Requests) != 0 {
+		t.Fatalf("expected empty resource requests by default, got %#v", container.Resources.Requests)
+	}
+	if len(container.Resources.Limits) != 0 {
+		t.Fatalf("expected empty resource limits by default, got %#v", container.Resources.Limits)
+	}
 	assertEnvValue(t, container.Env, "HF_REPO", modelCache.Spec.Source.Huggingface.Repo)
 	assertEnvValue(t, container.Env, "SOURCE_TYPE", "huggingface")
 	assertEnvValue(t, container.Env, "TARGET_PATH", "/model")
@@ -176,11 +185,59 @@ func TestDownloadJobForModelCache(t *testing.T) {
 	}
 }
 
+func TestDownloadJobForModelCacheWithOptionalResources(t *testing.T) {
+	modelCache := testModelCache()
+	modelCache.Spec.Downloader.Resources = praestov1alpha1.ResourceRequirements{
+		Requests: praestov1alpha1.ResourceList{CPU: "250m"},
+		Limits:   praestov1alpha1.ResourceList{Memory: "512Mi"},
+	}
+
+	job, err := DownloadJobForModelCache(modelCache, testPVC(modelCache))
+	if err != nil {
+		t.Fatalf("build Job: %v", err)
+	}
+	container := job.Spec.Template.Spec.Containers[0]
+
+	if got := container.Resources.Requests[corev1.ResourceCPU]; got != resource.MustParse("250m") {
+		t.Fatalf("unexpected CPU request: %s", got.String())
+	}
+	if _, ok := container.Resources.Requests[corev1.ResourceMemory]; ok {
+		t.Fatalf("expected memory request to be omitted, got %#v", container.Resources.Requests)
+	}
+	if got := container.Resources.Limits[corev1.ResourceMemory]; got != resource.MustParse("512Mi") {
+		t.Fatalf("unexpected memory limit: %s", got.String())
+	}
+	if _, ok := container.Resources.Limits[corev1.ResourceCPU]; ok {
+		t.Fatalf("expected CPU limit to be omitted, got %#v", container.Resources.Limits)
+	}
+}
+
+func TestDownloadJobForModelCacheRejectsInvalidResources(t *testing.T) {
+	modelCache := testModelCache()
+	modelCache.Spec.Downloader.Resources.Requests.CPU = "not-a-quantity"
+
+	_, err := DownloadJobForModelCache(modelCache, testPVC(modelCache))
+	if err == nil || !strings.Contains(err.Error(), "invalid downloader resource requests.cpu") {
+		t.Fatalf("expected invalid CPU request error, got %v", err)
+	}
+
+	modelCache = testModelCache()
+	modelCache.Spec.Downloader.Resources.Limits.Memory = "0"
+
+	_, err = DownloadJobForModelCache(modelCache, testPVC(modelCache))
+	if err == nil || !strings.Contains(err.Error(), "must be greater than zero") {
+		t.Fatalf("expected invalid memory limit error, got %v", err)
+	}
+}
+
 func TestDownloadJobForModelCacheOmitsOptionalEnv(t *testing.T) {
 	modelCache := testModelCache()
 	modelCache.Spec.Source.Huggingface.Revision = ""
 	modelCache.Spec.Source.Huggingface.Token.SecretRef = praestov1alpha1.SecretRef{}
-	job := DownloadJobForModelCache(modelCache, testPVC(modelCache))
+	job, err := DownloadJobForModelCache(modelCache, testPVC(modelCache))
+	if err != nil {
+		t.Fatalf("build Job: %v", err)
+	}
 	container := job.Spec.Template.Spec.Containers[0]
 
 	assertEnvMissing(t, container.Env, "HF_REVISION")
@@ -213,7 +270,10 @@ func TestEnsureDownloadJob(t *testing.T) {
 	})
 
 	t.Run("returns existing Job without duplicating it", func(t *testing.T) {
-		existingJob := DownloadJobForModelCache(modelCache, pvc)
+		existingJob, err := DownloadJobForModelCache(modelCache, pvc)
+		if err != nil {
+			t.Fatalf("build existing Job: %v", err)
+		}
 		k8sClient := newTestClient(scheme, modelCache, pvc, existingJob)
 
 		job, err := EnsureDownloadJob(ctx, k8sClient, scheme, modelCache, pvc)
