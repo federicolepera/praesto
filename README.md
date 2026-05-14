@@ -71,6 +71,17 @@ Install CRDs, RBAC, controller, webhook service, and cert-manager webhook certif
 kubectl apply -k config/default
 ```
 
+This installs the published operator image `ghcr.io/federicolepera/praesto:latest`.
+For reproducible installs, pin a release tag instead:
+
+```bash
+make deploy IMG=ghcr.io/federicolepera/praesto:0.1.0
+```
+
+Use `make deploy IMG=...` for local builds, private registries, or any custom
+operator image override. The generated manifests still support normal Kustomize
+image replacement.
+
 Wait for the controller manager:
 
 ```bash
@@ -336,7 +347,12 @@ kubectl apply -k config/default
 ```
 
 This path expects cert-manager to be installed because Praesto uses admission
-webhooks.
+webhooks. It uses the published `ghcr.io/federicolepera/praesto:latest` operator
+image by default. To pin a release or deploy a custom build, use:
+
+```bash
+make deploy IMG=ghcr.io/federicolepera/praesto:0.1.0
+```
 
 ### Local development without webhooks
 
