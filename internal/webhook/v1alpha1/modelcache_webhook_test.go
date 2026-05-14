@@ -56,6 +56,31 @@ var _ = Describe("ModelCache Webhook", func() {
 			Expect(err).NotTo(HaveOccurred())
 		})
 
+		It("Should admit update when only metadata or status changes", func() {
+			obj.Labels = map[string]string{"environment": "test"}
+			obj.Status.Phase = praestov1alpha1.ModelCachePhaseReady
+
+			_, err := validator.ValidateUpdate(ctx, oldObj, obj)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("Should deny update when spec changes", func() {
+			obj.Spec.Source.Huggingface.Revision = "new-revision"
+
+			_, err := validator.ValidateUpdate(ctx, oldObj, obj)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("spec"))
+			Expect(err.Error()).To(ContainSubstring("immutable"))
+		})
+
+		It("Should deny update when downloader spec changes", func() {
+			obj.Spec.Downloader.Image = "ghcr.io/federicolepera/praesto/downloader:custom"
+
+			_, err := validator.ValidateUpdate(ctx, oldObj, obj)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("immutable"))
+		})
+
 		It("Should admit creation when downloader resources are omitted", func() {
 			obj.Spec.Downloader.Resources = praestov1alpha1.ResourceRequirements{}
 

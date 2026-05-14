@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -74,13 +75,17 @@ func (v *ModelCacheCustomValidator) ValidateCreate(_ context.Context, obj runtim
 
 // ValidateUpdate implements webhook.CustomValidator so a webhook will be registered for the type ModelCache.
 func (v *ModelCacheCustomValidator) ValidateUpdate(_ context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
+	oldModelCache, ok := oldObj.(*praestov1alpha1.ModelCache)
+	if !ok {
+		return nil, fmt.Errorf("expected a ModelCache object for the oldObj but got %T", oldObj)
+	}
 	modelcache, ok := newObj.(*praestov1alpha1.ModelCache)
 	if !ok {
 		return nil, fmt.Errorf("expected a ModelCache object for the newObj but got %T", newObj)
 	}
 	modelcachelog.Info("Validation for ModelCache upon update", "name", modelcache.GetName())
 
-	return nil, validateModelCache(modelcache)
+	return nil, validateModelCacheUpdate(oldModelCache, modelcache)
 }
 
 // ValidateDelete implements webhook.CustomValidator so a webhook will be registered for the type ModelCache.
@@ -97,6 +102,19 @@ func (v *ModelCacheCustomValidator) ValidateDelete(ctx context.Context, obj runt
 }
 
 func validateModelCache(modelCache *praestov1alpha1.ModelCache) error {
+	return invalidModelCacheError(modelCache, validateModelCacheFields(modelCache))
+}
+
+func validateModelCacheUpdate(oldModelCache, newModelCache *praestov1alpha1.ModelCache) error {
+	allErrs := validateModelCacheFields(newModelCache)
+	if !apiequality.Semantic.DeepEqual(oldModelCache.Spec, newModelCache.Spec) {
+		allErrs = append(allErrs, field.Forbidden(field.NewPath("spec"), "ModelCache spec is immutable after creation"))
+	}
+
+	return invalidModelCacheError(newModelCache, allErrs)
+}
+
+func validateModelCacheFields(modelCache *praestov1alpha1.ModelCache) field.ErrorList {
 	var allErrs field.ErrorList
 
 	storagePath := field.NewPath("spec", "storage")
@@ -108,6 +126,10 @@ func validateModelCache(modelCache *praestov1alpha1.ModelCache) error {
 	downloaderPath := field.NewPath("spec", "downloader")
 	allErrs = append(allErrs, validateDownloader(modelCache, downloaderPath)...)
 
+	return allErrs
+}
+
+func invalidModelCacheError(modelCache *praestov1alpha1.ModelCache, allErrs field.ErrorList) error {
 	if len(allErrs) == 0 {
 		return nil
 	}
