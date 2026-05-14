@@ -15,9 +15,13 @@ Use the quick start manifests to validate the full v0.1.0 flow:
 ```bash
 kubectl apply -f config/samples/quickstart/00-modelcache-tinyllama.yaml
 kubectl get modelcache tinyllama-test -w
+kubectl label namespace default praesto.io/model-cache-injection=enabled
 kubectl apply -f config/samples/quickstart/01-tokenizer-deployment.yaml
 kubectl logs -l app=praesto-tokenizer-test -f
 ```
+
+The namespace label opts the workload namespace into Praesto Pod injection. The
+mutating webhook ignores namespaces without `praesto.io/model-cache-injection=enabled`.
 
 The tokenizer deployment is intentionally lightweight for local clusters such as
 minikube. It does not load the full model into memory; it only verifies that the
