@@ -38,7 +38,8 @@ import (
 // ModelCacheReconciler reconciles a ModelCache object
 type ModelCacheReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	APIReader client.Reader
+	Scheme    *runtime.Scheme
 }
 
 // +kubebuilder:rbac:groups=praesto.praesto.io,resources=modelcaches,verbs=get;list;watch;create;update;patch;delete
@@ -71,6 +72,47 @@ func (r *ModelCacheReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	if modelCache.Status.Phase == praestov1alpha1.ModelCachePhaseReady {
+		pvc, err := downloader.GetManagedModelCachePVC(ctx, r.readyPVCReader(), &modelCache)
+		if err != nil {
+			logger.Error(err, "unable to get PVC for ready ModelCache")
+			modelCache.Status.Phase = praestov1alpha1.ModelCachePhaseFailed
+			modelCache.Status.PvcName = ""
+			modelCache.Status.DownloadJobName = ""
+			status.SetCondition(&modelCache, status.ConditionPVCReady, metav1.ConditionFalse, "PVCLost", "PVC for ready ModelCache is missing")
+			status.SetCondition(&modelCache, status.ConditionDownloadComplete, metav1.ConditionFalse, "DownloadJobUnknown", "Download job status is unknown because PVC is missing")
+			status.SetCondition(&modelCache, status.ConditionReady, metav1.ConditionFalse, "ModelNotReady", "Model is not ready because PVC is missing")
+			if updateErr := status.Update(ctx, r.Client, &modelCache); updateErr != nil {
+				logger.Error(updateErr, "unable to update ModelCache status after PVC loss")
+			}
+			return ctrl.Result{}, err
+		}
+		if !pvc.DeletionTimestamp.IsZero() {
+			logger.Info("PVC for ready ModelCache is being deleted", "pvc", pvc.Name)
+			modelCache.Status.Phase = praestov1alpha1.ModelCachePhaseFailed
+			modelCache.Status.PvcName = pvc.Name
+			modelCache.Status.DownloadJobName = ""
+			status.SetCondition(&modelCache, status.ConditionPVCReady, metav1.ConditionFalse, "PVCDeleting", "PVC for ready ModelCache is being deleted")
+			status.SetCondition(&modelCache, status.ConditionDownloadComplete, metav1.ConditionFalse, "DownloadJobUnknown", "Download job status is unknown because PVC is being deleted")
+			status.SetCondition(&modelCache, status.ConditionReady, metav1.ConditionFalse, "ModelNotReady", "Model is not ready because PVC is being deleted")
+			if updateErr := status.Update(ctx, r.Client, &modelCache); updateErr != nil {
+				logger.Error(updateErr, "unable to update ModelCache status after PVC deletion started")
+			}
+			return ctrl.Result{}, fmt.Errorf("PVC %s for ready ModelCache is being deleted", pvc.Name)
+		}
+		if pvc.Status.Phase != corev1.ClaimBound {
+			logger.Info("PVC for ready ModelCache is not bound anymore", "pvc", pvc.Name)
+			modelCache.Status.Phase = praestov1alpha1.ModelCachePhaseFailed
+			modelCache.Status.PvcName = pvc.Name
+			modelCache.Status.DownloadJobName = ""
+			status.SetCondition(&modelCache, status.ConditionPVCReady, metav1.ConditionFalse, "PVCLost", "PVC for ready ModelCache is no longer bound")
+			status.SetCondition(&modelCache, status.ConditionDownloadComplete, metav1.ConditionFalse, "DownloadJobUnknown", "Download job status is unknown because PVC is not bound")
+			status.SetCondition(&modelCache, status.ConditionReady, metav1.ConditionFalse, "ModelNotReady", "Model is not ready because PVC is not bound")
+			if updateErr := status.Update(ctx, r.Client, &modelCache); updateErr != nil {
+				logger.Error(updateErr, "unable to update ModelCache status after PVC unbound")
+			}
+			return ctrl.Result{}, fmt.Errorf("PVC %s for ready ModelCache is not bound anymore", pvc.Name)
+		}
+		logger.Info("ModelCache is already ready", "pvc", pvc.Name)
 		return ctrl.Result{}, nil
 	}
 
@@ -149,6 +191,14 @@ func (r *ModelCacheReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}
 	return ctrl.Result{}, nil
+}
+
+func (r *ModelCacheReconciler) readyPVCReader() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+
+	return r.Client
 }
 
 // SetupWithManager sets up the controller with the Manager.

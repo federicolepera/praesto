@@ -43,6 +43,16 @@ const modelCacheVolumeName = "praesto-model-cache"
 
 const workloadNamespaceWithoutInjection = "praesto-e2e-no-injection"
 
+const realDownloadModelCacheName = "real-download-cache"
+
+const realDownloadPVCName = "praesto-real-download-cache"
+
+const realDownloadJobName = "praesto-download-real-download-cache"
+
+const realDownloadPVName = "praesto-e2e-real-download-cache"
+
+const realDownloadStorageClass = "praesto-e2e-rwx"
+
 // serviceAccountName created for the project
 const serviceAccountName = "praesto-controller-manager"
 
@@ -410,14 +420,7 @@ spec:
 		})
 
 		It("should complete a real downloader flow and expose downloaded files to a consumer Pod", func() {
-			const (
-				modelCacheName = "real-download-cache"
-				pvcName        = "praesto-real-download-cache"
-				jobName        = "praesto-download-real-download-cache"
-				consumerPod    = "real-download-consumer"
-				pvName         = "praesto-e2e-real-download-cache"
-				storageClass   = "praesto-e2e-rwx"
-			)
+			const consumerPod = "real-download-consumer"
 
 			By("creating a static RWX PersistentVolume for the real download PVC")
 			_, err := kubectlApplyYAML(fmt.Sprintf(`
@@ -438,7 +441,7 @@ spec:
   hostPath:
     path: /tmp/%s
     type: DirectoryOrCreate
-`, pvName, storageClass, workloadNamespace, pvcName, pvName))
+`, realDownloadPVName, realDownloadStorageClass, workloadNamespace, realDownloadPVCName, realDownloadPVName))
 			Expect(err).NotTo(HaveOccurred(), "static RWX PV should be created")
 
 			By("creating a ModelCache that uses the e2e downloader image")
@@ -458,29 +461,22 @@ spec:
     size: 1Gi
   downloader:
     image: %s
-`, modelCacheName, workloadNamespace, storageClass, downloaderImage))
+`, realDownloadModelCacheName, workloadNamespace, realDownloadStorageClass, downloaderImage))
 			Expect(err).NotTo(HaveOccurred(), "real ModelCache should be accepted")
 
 			By("waiting for the PVC to bind")
 			Eventually(func(g Gomega) {
-				phase := kubectlJSONPath(g, "pvc", pvcName, workloadNamespace, `{.status.phase}`)
+				phase := kubectlJSONPath(g, "pvc", realDownloadPVCName, workloadNamespace, `{.status.phase}`)
 				g.Expect(phase).To(Equal("Bound"))
 			}, 2*time.Minute).Should(Succeed())
 
 			By("waiting for the downloader Job to complete")
-			cmd := exec.Command("kubectl", "wait", "--for=condition=complete", "job/"+jobName,
+			cmd := exec.Command("kubectl", "wait", "--for=condition=complete", "job/"+realDownloadJobName,
 				"-n", workloadNamespace, "--timeout=10m")
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "downloader Job should complete")
 
-			By("waiting for ModelCache status to become Ready")
-			Eventually(func(g Gomega) {
-				phase := kubectlJSONPath(g, "modelcache", modelCacheName, workloadNamespace, `{.status.phase}`)
-				g.Expect(phase).To(Equal("Ready"))
-
-				statusPVCName := kubectlJSONPath(g, "modelcache", modelCacheName, workloadNamespace, `{.status.pvcName}`)
-				g.Expect(statusPVCName).To(Equal(pvcName))
-			}, 2*time.Minute).Should(Succeed())
+			ensureRealDownloadCacheReady()
 
 			By("creating a consumer Pod that reads a downloaded file from the injected volume")
 			_, err = kubectlApplyYAML(fmt.Sprintf(`
@@ -498,7 +494,7 @@ spec:
   - name: app
     image: busybox:1.36
     command: ["sh", "-c", "test -f /models/config.json && test -f /models/.praesto-complete"]
-`, consumerPod, workloadNamespace, modelCacheName))
+`, consumerPod, workloadNamespace, realDownloadModelCacheName))
 			Expect(err).NotTo(HaveOccurred(), "consumer Pod should be admitted and mutated")
 
 			By("waiting for the consumer Pod to read the downloaded files successfully")
@@ -509,8 +505,7 @@ spec:
 		})
 
 		It("should inject a ready ModelCache volume into an annotated Pod", func() {
-			By("creating a ready ModelCache status fixture")
-			createReadyModelCacheFixture("single-container-cache", "praesto-single-container-cache")
+			ensureRealDownloadCacheReady()
 
 			By("creating an annotated Pod")
 			_, err := kubectlApplyYAML(fmt.Sprintf(`
@@ -520,21 +515,21 @@ metadata:
   name: single-container-consumer
   namespace: %s
   annotations:
-    praesto.io/model-cache: single-container-cache
+    praesto.io/model-cache: %s
     praesto.io/model-mount-path: /models
 spec:
   containers:
   - name: app
     image: busybox:1.36
     command: ["sh", "-c", "sleep 3600"]
-`, workloadNamespace))
+`, workloadNamespace, realDownloadModelCacheName))
 			Expect(err).NotTo(HaveOccurred(), "annotated Pod should be admitted and mutated")
 
 			By("verifying the injected read-only PVC volume and mount")
 			Eventually(func(g Gomega) {
 				claimName := kubectlJSONPath(g, "pod", "single-container-consumer", workloadNamespace,
 					fmt.Sprintf(`{.spec.volumes[?(@.name=="%s")].persistentVolumeClaim.claimName}`, modelCacheVolumeName))
-				g.Expect(claimName).To(Equal("praesto-single-container-cache"))
+				g.Expect(claimName).To(Equal(realDownloadPVCName))
 
 				mountPath := kubectlJSONPath(g, "pod", "single-container-consumer", workloadNamespace,
 					fmt.Sprintf(`{.spec.containers[0].volumeMounts[?(@.name=="%s")].mountPath}`, modelCacheVolumeName))
@@ -547,8 +542,7 @@ spec:
 		})
 
 		It("should inject a ready ModelCache volume only into the selected target container", func() {
-			By("creating a ready ModelCache status fixture")
-			createReadyModelCacheFixture("target-container-cache", "praesto-target-container-cache")
+			ensureRealDownloadCacheReady()
 
 			By("creating an annotated multi-container Pod")
 			_, err := kubectlApplyYAML(fmt.Sprintf(`
@@ -558,7 +552,7 @@ metadata:
   name: target-container-consumer
   namespace: %s
   annotations:
-    praesto.io/model-cache: target-container-cache
+    praesto.io/model-cache: %s
     praesto.io/model-mount-path: /models
     praesto.io/target-container: app
 spec:
@@ -569,7 +563,7 @@ spec:
   - name: app
     image: busybox:1.36
     command: ["sh", "-c", "sleep 3600"]
-`, workloadNamespace))
+`, workloadNamespace, realDownloadModelCacheName))
 			Expect(err).NotTo(HaveOccurred(), "annotated multi-container Pod should be admitted and mutated")
 
 			By("verifying only the selected container receives the mount")
@@ -673,34 +667,6 @@ func getMetricsOutput() (string, error) {
 	return utils.Run(cmd)
 }
 
-func createReadyModelCacheFixture(name, pvcName string) {
-	_, err := kubectlApplyYAML(fmt.Sprintf(`
-apiVersion: praesto.praesto.io/v1alpha1
-kind: ModelCache
-metadata:
-  name: %s
-  namespace: %s
-spec:
-  source:
-    huggingface:
-      repo: TinyLlama/TinyLlama-1.1B-Chat-v1.0
-      revision: main
-  storage:
-    storageClassName: standard
-    size: 10Gi
-`, name, workloadNamespace))
-	Expect(err).NotTo(HaveOccurred(), "Failed to create ModelCache fixture")
-
-	cmd := exec.Command("kubectl", "patch", "modelcache", name,
-		"-n", workloadNamespace,
-		"--subresource=status",
-		"--type=merge",
-		"-p", fmt.Sprintf(`{"status":{"phase":"Ready","pvcName":"%s","downloadJobName":"praesto-download-%s"}}`, pvcName, name),
-	)
-	_, err = utils.Run(cmd)
-	Expect(err).NotTo(HaveOccurred(), "Failed to patch ModelCache status")
-}
-
 func kubectlApplyYAML(yaml string) (string, error) {
 	manifestFile, err := os.CreateTemp("", "praesto-e2e-*.yaml")
 	if err != nil {
@@ -720,6 +686,17 @@ func kubectlApplyYAML(yaml string) (string, error) {
 
 	cmd := exec.Command("kubectl", "apply", "-f", manifestFile.Name())
 	return utils.Run(cmd)
+}
+
+func ensureRealDownloadCacheReady() {
+	By("verifying the real download ModelCache is Ready")
+	Eventually(func(g Gomega) {
+		phase := kubectlJSONPath(g, "modelcache", realDownloadModelCacheName, workloadNamespace, `{.status.phase}`)
+		g.Expect(phase).To(Equal("Ready"))
+
+		statusPVCName := kubectlJSONPath(g, "modelcache", realDownloadModelCacheName, workloadNamespace, `{.status.pvcName}`)
+		g.Expect(statusPVCName).To(Equal(realDownloadPVCName))
+	}, 2*time.Minute).Should(Succeed())
 }
 
 func kubectlJSONPath(g Gomega, resourceType, name, resourceNamespace, jsonPath string) string {
