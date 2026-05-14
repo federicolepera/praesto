@@ -233,6 +233,13 @@ Praesto reconciles this resource by creating:
 
 The downloader Job starts only after the PVC is bound.
 
+Praesto verifies that `spec.storage.storageClassName` exists before creating the
+PVC. If the StorageClass is missing, the `ModelCache` moves to `Failed` with a
+`PVCReady=False` condition reason `StorageClassNotFound`. Kubernetes does not
+expose a generic way to know whether a StorageClass supports `ReadWriteMany`, so
+PVCs that remain pending include a status message that points users to verify
+RWX support for the configured StorageClass.
+
 ### Status
 
 Praesto updates the `ModelCache` status with:
@@ -476,7 +483,9 @@ make undeploy
 - The mutating webhook expects a ready `ModelCache` in the same namespace as the Pod.
 - The mutating webhook only runs in namespaces labeled `praesto.io/model-cache-injection=enabled`.
 - The official installation path currently uses Kustomize, not Helm.
-- Storage must be provided by a user-managed RWX-capable StorageClass.
+- Storage must be provided by a user-managed RWX-capable StorageClass. Praesto
+  validates StorageClass existence, but RWX support is diagnosed from PVC
+  pending status because it is provisioner-specific.
 
 ## License
 
