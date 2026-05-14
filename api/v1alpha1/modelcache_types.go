@@ -39,8 +39,28 @@ type Source struct {
 }
 
 type Storage struct {
+	// +optional
 	StorageClassName string `json:"storageClassName,omitempty"`
-	Size             string `json:"size,omitempty"`
+	// +optional
+	Size string `json:"size,omitempty"`
+}
+type ResourceList struct {
+	// +optional
+	CPU string `json:"cpu,omitempty"`
+	// +optional
+	Memory string `json:"memory,omitempty"`
+}
+type ResourceRequirements struct {
+	// +optional
+	Requests ResourceList `json:"requests,omitempty"`
+	// +optional
+	Limits ResourceList `json:"limits,omitempty"`
+}
+type Downloader struct {
+	// +optional
+	Image string `json:"image,omitempty"`
+	// +optional
+	Resources ResourceRequirements `json:"resources,omitempty"`
 }
 
 // ModelCacheSpec defines the desired state of ModelCache
@@ -48,6 +68,9 @@ type ModelCacheSpec struct {
 	Source Source `json:"source"`
 
 	Storage Storage `json:"storage"`
+
+	// +optional
+	Downloader Downloader `json:"downloader,omitempty"`
 }
 
 const (

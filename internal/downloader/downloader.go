@@ -138,7 +138,10 @@ func EnsureDownloadJob(ctx context.Context, k8sClient client.Client, scheme *run
 		return nil, err
 	}
 
-	job = DownloadJobForModelCache(modelCache, pvc)
+	job, err = DownloadJobForModelCache(modelCache, pvc)
+	if err != nil {
+		return nil, err
+	}
 	if err := controllerutil.SetControllerReference(modelCache, job, scheme); err != nil {
 		return nil, err
 	}
@@ -156,7 +159,16 @@ func EnsureDownloadJob(ctx context.Context, k8sClient client.Client, scheme *run
 	return job, nil
 }
 
-func DownloadJobForModelCache(modelCache *praestov1alpha1.ModelCache, pvc *corev1.PersistentVolumeClaim) *batchv1.Job {
+func DownloadJobForModelCache(modelCache *praestov1alpha1.ModelCache, pvc *corev1.PersistentVolumeClaim) (*batchv1.Job, error) {
+	resources, err := resourceRequirementsForDownloader(modelCache.Spec.Downloader.Resources)
+	if err != nil {
+		return nil, err
+	}
+
+	image := modelCache.Spec.Downloader.Image
+	if image == "" {
+		image = DefaultDownloaderImage
+	}
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      JobNameForModelCache(modelCache.Name),
@@ -172,7 +184,7 @@ func DownloadJobForModelCache(modelCache *praestov1alpha1.ModelCache, pvc *corev
 					RestartPolicy: corev1.RestartPolicyOnFailure,
 					Containers: []corev1.Container{{
 						Name:  "downloader",
-						Image: DefaultDownloaderImage,
+						Image: image,
 						Env: []corev1.EnvVar{
 							{Name: "HF_REPO", Value: modelCache.Spec.Source.Huggingface.Repo},
 							{Name: "SOURCE_TYPE", Value: "huggingface"},
@@ -180,7 +192,9 @@ func DownloadJobForModelCache(modelCache *praestov1alpha1.ModelCache, pvc *corev
 							{Name: "MODELCACHE_NAME", Value: modelCache.Name},
 							{Name: "MODELCACHE_NAMESPACE", Value: modelCache.Namespace},
 						},
-						VolumeMounts: []corev1.VolumeMount{{Name: "model-storage", MountPath: "/model"}},
+						VolumeMounts:    []corev1.VolumeMount{{Name: "model-storage", MountPath: "/model"}},
+						Resources:       resources,
+						ImagePullPolicy: corev1.PullIfNotPresent,
 					}},
 					Volumes: []corev1.Volume{{
 						Name: "model-storage",
@@ -207,7 +221,62 @@ func DownloadJobForModelCache(modelCache *praestov1alpha1.ModelCache, pvc *corev
 		})
 	}
 
-	return job
+	return job, nil
+}
+
+func resourceRequirementsForDownloader(resources praestov1alpha1.ResourceRequirements) (corev1.ResourceRequirements, error) {
+	requests, err := resourceListForDownloader(resources.Requests, "requests")
+	if err != nil {
+		return corev1.ResourceRequirements{}, err
+	}
+
+	limits, err := resourceListForDownloader(resources.Limits, "limits")
+	if err != nil {
+		return corev1.ResourceRequirements{}, err
+	}
+
+	return corev1.ResourceRequirements{
+		Requests: requests,
+		Limits:   limits,
+	}, nil
+}
+
+func resourceListForDownloader(resources praestov1alpha1.ResourceList, fieldName string) (corev1.ResourceList, error) {
+	resourceList := corev1.ResourceList{}
+
+	if resources.CPU != "" {
+		cpu, err := parsePositiveQuantity(resources.CPU, fieldName+".cpu")
+		if err != nil {
+			return nil, err
+		}
+		resourceList[corev1.ResourceCPU] = cpu
+	}
+
+	if resources.Memory != "" {
+		memory, err := parsePositiveQuantity(resources.Memory, fieldName+".memory")
+		if err != nil {
+			return nil, err
+		}
+		resourceList[corev1.ResourceMemory] = memory
+	}
+
+	if len(resourceList) == 0 {
+		return nil, nil
+	}
+
+	return resourceList, nil
+}
+
+func parsePositiveQuantity(value, fieldName string) (resource.Quantity, error) {
+	quantity, err := resource.ParseQuantity(value)
+	if err != nil {
+		return resource.Quantity{}, fmt.Errorf("invalid downloader resource %s %q: %w", fieldName, value, err)
+	}
+	if quantity.Sign() <= 0 {
+		return resource.Quantity{}, fmt.Errorf("invalid downloader resource %s %q: must be greater than zero", fieldName, value)
+	}
+
+	return quantity, nil
 }
 
 func IsDownloadJobComplete(job *batchv1.Job) (bool, error) {

@@ -105,6 +105,9 @@ func validateModelCache(modelCache *praestov1alpha1.ModelCache) error {
 	sourcePath := field.NewPath("spec", "source")
 	allErrs = append(allErrs, validateSource(modelCache, sourcePath)...)
 
+	downloaderPath := field.NewPath("spec", "downloader")
+	allErrs = append(allErrs, validateDownloader(modelCache, downloaderPath)...)
+
 	if len(allErrs) == 0 {
 		return nil
 	}
@@ -114,6 +117,41 @@ func validateModelCache(modelCache *praestov1alpha1.ModelCache) error {
 		modelCache.Name,
 		allErrs,
 	)
+}
+
+func validateDownloader(modelCache *praestov1alpha1.ModelCache, path *field.Path) field.ErrorList {
+	var allErrs field.ErrorList
+
+	resourcesPath := path.Child("resources")
+	allErrs = append(allErrs, validateResourceList(modelCache.Spec.Downloader.Resources.Requests, resourcesPath.Child("requests"))...)
+	allErrs = append(allErrs, validateResourceList(modelCache.Spec.Downloader.Resources.Limits, resourcesPath.Child("limits"))...)
+
+	return allErrs
+}
+
+func validateResourceList(resources praestov1alpha1.ResourceList, path *field.Path) field.ErrorList {
+	var allErrs field.ErrorList
+
+	allErrs = append(allErrs, validateOptionalQuantity(resources.CPU, path.Child("cpu"))...)
+	allErrs = append(allErrs, validateOptionalQuantity(resources.Memory, path.Child("memory"))...)
+
+	return allErrs
+}
+
+func validateOptionalQuantity(value string, path *field.Path) field.ErrorList {
+	if value == "" {
+		return nil
+	}
+
+	quantity, err := resource.ParseQuantity(value)
+	if err != nil {
+		return field.ErrorList{field.Invalid(path, value, "must be a valid Kubernetes quantity")}
+	}
+	if quantity.Sign() <= 0 {
+		return field.ErrorList{field.Invalid(path, value, "must be greater than zero")}
+	}
+
+	return nil
 }
 
 func validateStorage(modelCache *praestov1alpha1.ModelCache, path *field.Path) field.ErrorList {

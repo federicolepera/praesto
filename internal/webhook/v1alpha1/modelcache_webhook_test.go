@@ -56,6 +56,21 @@ var _ = Describe("ModelCache Webhook", func() {
 			Expect(err).NotTo(HaveOccurred())
 		})
 
+		It("Should admit creation when downloader resources are omitted", func() {
+			obj.Spec.Downloader.Resources = praestov1alpha1.ResourceRequirements{}
+
+			_, err := validator.ValidateCreate(ctx, obj)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("Should admit creation when only some downloader resources are set", func() {
+			obj.Spec.Downloader.Resources.Requests.CPU = "250m"
+			obj.Spec.Downloader.Resources.Limits.Memory = "512Mi"
+
+			_, err := validator.ValidateCreate(ctx, obj)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
 		It("Should deny creation when storage fields are missing", func() {
 			obj.Spec.Storage.StorageClassName = ""
 			obj.Spec.Storage.Size = ""
@@ -80,6 +95,16 @@ var _ = Describe("ModelCache Webhook", func() {
 			_, err := validator.ValidateCreate(ctx, obj)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("must be greater than zero"))
+		})
+
+		It("Should deny creation when downloader resources are invalid", func() {
+			obj.Spec.Downloader.Resources.Requests.CPU = "not-a-quantity"
+			obj.Spec.Downloader.Resources.Limits.Memory = "0"
+
+			_, err := validator.ValidateCreate(ctx, obj)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("spec.downloader.resources.requests.cpu"))
+			Expect(err.Error()).To(ContainSubstring("spec.downloader.resources.limits.memory"))
 		})
 
 		It("Should deny creation when HuggingFace repo is missing", func() {
