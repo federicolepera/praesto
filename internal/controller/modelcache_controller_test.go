@@ -21,6 +21,7 @@ import (
 	"fmt"
 
 	"github.com/federicolepera/praesto/internal/downloader"
+	"github.com/federicolepera/praesto/internal/status"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -186,6 +187,52 @@ var _ = Describe("ModelCache Controller", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("not managed by praesto"))
 	})
+
+	It("marks a ready ModelCache failed when its PVC is missing", func() {
+		mc := markModelCacheReady(ctx, typeNamespacedName, downloader.PVCNameForModelCache(resourceName))
+
+		controllerReconciler := &ModelCacheReconciler{Client: k8sClient, APIReader: k8sClient, Scheme: k8sClient.Scheme()}
+		_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+		Expect(err).To(HaveOccurred())
+
+		Expect(k8sClient.Get(ctx, typeNamespacedName, mc)).To(Succeed())
+		Expect(mc.Status.Phase).To(Equal(praestov1alpha1.ModelCachePhaseFailed))
+		Expect(mc.Status.PvcName).To(BeEmpty())
+		Expect(conditionReason(mc.Status.Conditions, status.ConditionPVCReady)).To(Equal("PVCLost"))
+	})
+
+	It("marks a ready ModelCache failed when its PVC is being deleted", func() {
+		pvc := &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       downloader.PVCNameForModelCache(resourceName),
+				Namespace:  namespace,
+				Labels:     downloader.ModelCacheLabels(resourceName),
+				Finalizers: []string{"praesto.io/test-finalizer"},
+			},
+			Spec: validPVCSpec(),
+		}
+		Expect(k8sClient.Create(ctx, pvc)).To(Succeed())
+		pvc.Status.Phase = corev1.ClaimBound
+		Expect(k8sClient.Status().Update(ctx, pvc)).To(Succeed())
+		Expect(k8sClient.Delete(ctx, pvc)).To(Succeed())
+
+		mc := markModelCacheReady(ctx, typeNamespacedName, pvc.Name)
+
+		controllerReconciler := &ModelCacheReconciler{Client: k8sClient, APIReader: k8sClient, Scheme: k8sClient.Scheme()}
+		_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("being deleted"))
+
+		Expect(k8sClient.Get(ctx, typeNamespacedName, mc)).To(Succeed())
+		Expect(mc.Status.Phase).To(Equal(praestov1alpha1.ModelCachePhaseFailed))
+		Expect(mc.Status.PvcName).To(Equal(pvc.Name))
+		Expect(conditionReason(mc.Status.Conditions, status.ConditionPVCReady)).To(Equal("PVCDeleting"))
+
+		terminatingPVC := &corev1.PersistentVolumeClaim{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: pvc.Name, Namespace: namespace}, terminatingPVC)).To(Succeed())
+		terminatingPVC.Finalizers = nil
+		Expect(k8sClient.Update(ctx, terminatingPVC)).To(Succeed())
+	})
 })
 
 func validPVCSpec() corev1.PersistentVolumeClaimSpec {
@@ -197,4 +244,24 @@ func validPVCSpec() corev1.PersistentVolumeClaimSpec {
 			},
 		},
 	}
+}
+
+func markModelCacheReady(ctx context.Context, key types.NamespacedName, pvcName string) *praestov1alpha1.ModelCache {
+	mc := &praestov1alpha1.ModelCache{}
+	Expect(k8sClient.Get(ctx, key, mc)).To(Succeed())
+	mc.Status.Phase = praestov1alpha1.ModelCachePhaseReady
+	mc.Status.PvcName = pvcName
+	mc.Status.DownloadJobName = downloader.JobNameForModelCache(mc.Name)
+	Expect(k8sClient.Status().Update(ctx, mc)).To(Succeed())
+	return mc
+}
+
+func conditionReason(conditions []metav1.Condition, conditionType string) string {
+	for _, condition := range conditions {
+		if condition.Type == conditionType {
+			return condition.Reason
+		}
+	}
+
+	return ""
 }

@@ -75,6 +75,19 @@ func EnsureModelCachePVC(ctx context.Context, k8sClient client.Client, scheme *r
 	return pvc, nil
 }
 
+func GetManagedModelCachePVC(ctx context.Context, reader client.Reader, modelCache *praestov1alpha1.ModelCache) (*corev1.PersistentVolumeClaim, error) {
+	pvc := &corev1.PersistentVolumeClaim{}
+	key := types.NamespacedName{Name: PVCNameForModelCache(modelCache.Name), Namespace: modelCache.Namespace}
+	if err := reader.Get(ctx, key, pvc); err != nil {
+		return nil, err
+	}
+	if err := validateManagedPVC(pvc, modelCache); err != nil {
+		return nil, err
+	}
+
+	return pvc, nil
+}
+
 func validateManagedPVC(pvc *corev1.PersistentVolumeClaim, modelCache *praestov1alpha1.ModelCache) error {
 	labels := pvc.GetLabels()
 	if labels[ManagedLabelKey] != "true" || labels[ModelLabelKey] != modelCache.Name {
