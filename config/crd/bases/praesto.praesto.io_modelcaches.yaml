@@ -49,6 +49,28 @@ spec:
           spec:
             description: spec defines the desired state of ModelCache
             properties:
+              downloader:
+                properties:
+                  image:
+                    type: string
+                  resources:
+                    properties:
+                      limits:
+                        properties:
+                          cpu:
+                            type: string
+                          memory:
+                            type: string
+                        type: object
+                      requests:
+                        properties:
+                          cpu:
+                            type: string
+                          memory:
+                            type: string
+                        type: object
+                    type: object
+                type: object
               source:
                 properties:
                   huggingface:
