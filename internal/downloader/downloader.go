@@ -17,7 +17,7 @@ import (
 	praestov1alpha1 "github.com/federicolepera/praesto/api/v1alpha1"
 )
 
-const DefaultDownloaderImage = "ghcr.io/federicolepera/praesto:v0.1.0"
+const DefaultDownloaderImage = "ghcr.io/federicolepera/praesto/downloader:latest"
 
 const (
 	ManagedLabelKey = "praesto.io/managed"
