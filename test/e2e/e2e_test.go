@@ -422,8 +422,19 @@ spec:
 		It("should complete a real downloader flow and expose downloaded files to a consumer Pod", func() {
 			const consumerPod = "real-download-consumer"
 
-			By("creating a static RWX PersistentVolume for the real download PVC")
+			By("creating an e2e StorageClass for the static RWX PersistentVolume")
 			_, err := kubectlApplyYAML(fmt.Sprintf(`
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: %s
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: Immediate
+`, realDownloadStorageClass))
+			Expect(err).NotTo(HaveOccurred(), "e2e StorageClass should be created")
+
+			By("creating a static RWX PersistentVolume for the real download PVC")
+			_, err = kubectlApplyYAML(fmt.Sprintf(`
 apiVersion: v1
 kind: PersistentVolume
 metadata:

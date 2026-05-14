@@ -228,7 +228,7 @@ func (r *ModelCacheReconciler) ensureStorageClassExists(ctx context.Context, mod
 	}
 
 	storageClass := &storagev1.StorageClass{}
-	err := r.Get(ctx, client.ObjectKey{Name: modelCache.Spec.Storage.StorageClassName}, storageClass)
+	err := r.storageClassReader().Get(ctx, client.ObjectKey{Name: modelCache.Spec.Storage.StorageClassName}, storageClass)
 	if err == nil {
 		return true, nil
 	}
@@ -237,6 +237,14 @@ func (r *ModelCacheReconciler) ensureStorageClassExists(ctx context.Context, mod
 	}
 
 	return false, err
+}
+
+func (r *ModelCacheReconciler) storageClassReader() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+
+	return r.Client
 }
 
 // SetupWithManager sets up the controller with the Manager.
