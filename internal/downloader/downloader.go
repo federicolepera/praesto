@@ -182,6 +182,7 @@ func DownloadJobForModelCache(modelCache *praestov1alpha1.ModelCache, pvc *corev
 	if image == "" {
 		image = DefaultDownloaderImage
 	}
+	securityContext := securityContextForDownloader(modelCache.Spec.Downloader.ContainerSecurityContext)
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      JobNameForModelCache(modelCache.Name),
@@ -196,8 +197,9 @@ func DownloadJobForModelCache(modelCache *praestov1alpha1.ModelCache, pvc *corev
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyOnFailure,
 					Containers: []corev1.Container{{
-						Name:  "downloader",
-						Image: image,
+						Name:            "downloader",
+						Image:           image,
+						SecurityContext: securityContext,
 						Env: []corev1.EnvVar{
 							{Name: "HF_REPO", Value: modelCache.Spec.Source.Huggingface.Repo},
 							{Name: "SOURCE_TYPE", Value: "huggingface"},
@@ -235,6 +237,25 @@ func DownloadJobForModelCache(modelCache *praestov1alpha1.ModelCache, pvc *corev
 	}
 
 	return job, nil
+}
+
+func securityContextForDownloader(securityContext *praestov1alpha1.ContainerSecurityContext) *corev1.SecurityContext {
+	if securityContext == nil {
+		return nil
+	}
+
+	return &corev1.SecurityContext{
+		Capabilities:             securityContext.Capabilities,
+		Privileged:               securityContext.Privileged,
+		SELinuxOptions:           securityContext.SELinuxOptions,
+		RunAsUser:                securityContext.RunAsUser,
+		RunAsGroup:               securityContext.RunAsGroup,
+		RunAsNonRoot:             securityContext.RunAsNonRoot,
+		ReadOnlyRootFilesystem:   securityContext.ReadOnlyRootFilesystem,
+		AllowPrivilegeEscalation: securityContext.AllowPrivilegeEscalation,
+		ProcMount:                securityContext.ProcMount,
+		SeccompProfile:           securityContext.SeccompProfile,
+	}
 }
 
 func resourceRequirementsForDownloader(resources praestov1alpha1.ResourceRequirements) (corev1.ResourceRequirements, error) {

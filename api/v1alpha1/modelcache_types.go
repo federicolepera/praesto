@@ -17,6 +17,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -56,11 +57,37 @@ type ResourceRequirements struct {
 	// +optional
 	Limits ResourceList `json:"limits,omitempty"`
 }
+
+type ContainerSecurityContext struct {
+	// +optional
+	Capabilities *corev1.Capabilities `json:"capabilities,omitempty"`
+	// +optional
+	Privileged *bool `json:"privileged,omitempty"`
+	// +optional
+	SELinuxOptions *corev1.SELinuxOptions `json:"seLinuxOptions,omitempty"`
+	// +optional
+	RunAsUser *int64 `json:"runAsUser,omitempty"`
+	// +optional
+	RunAsGroup *int64 `json:"runAsGroup,omitempty"`
+	// +optional
+	RunAsNonRoot *bool `json:"runAsNonRoot,omitempty"`
+	// +optional
+	ReadOnlyRootFilesystem *bool `json:"readOnlyRootFilesystem,omitempty"`
+	// +optional
+	AllowPrivilegeEscalation *bool `json:"allowPrivilegeEscalation,omitempty"`
+	// +optional
+	ProcMount *corev1.ProcMountType `json:"procMount,omitempty"`
+	// +optional
+	SeccompProfile *corev1.SeccompProfile `json:"seccompProfile,omitempty"`
+}
+
 type Downloader struct {
 	// +optional
 	Image string `json:"image,omitempty"`
 	// +optional
 	Resources ResourceRequirements `json:"resources,omitempty"`
+	// +optional
+	ContainerSecurityContext *ContainerSecurityContext `json:"containerSecurityContext,omitempty"`
 }
 
 // ModelCacheSpec defines the desired state of ModelCache
