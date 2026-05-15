@@ -24,26 +24,36 @@ import (
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 type SecretRef struct {
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
-	Key  string `json:"key"`
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Key string `json:"key"`
 }
 type Token struct {
-	SecretRef SecretRef `json:"secretRef,omitempty"`
+	// +kubebuilder:validation:Required
+	SecretRef SecretRef `json:"secretRef"`
 }
 type HuggingfaceSource struct {
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
 	Repo     string `json:"repo"`
 	Revision string `json:"revision,omitempty"`
 	Token    Token  `json:"token,omitempty"`
 }
 type Source struct {
-	Huggingface HuggingfaceSource `json:"huggingface,omitempty"`
+	// +kubebuilder:validation:Required
+	Huggingface HuggingfaceSource `json:"huggingface"`
 }
 
 type Storage struct {
-	// +optional
-	StorageClassName string `json:"storageClassName,omitempty"`
-	// +optional
-	Size string `json:"size,omitempty"`
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	StorageClassName string `json:"storageClassName"`
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Size string `json:"size"`
 }
 type ResourceList struct {
 	// +optional
@@ -76,6 +86,7 @@ type ContainerSecurityContext struct {
 	// +optional
 	AllowPrivilegeEscalation *bool `json:"allowPrivilegeEscalation,omitempty"`
 	// +optional
+	// +kubebuilder:validation:Enum=Default;Unmasked
 	ProcMount *corev1.ProcMountType `json:"procMount,omitempty"`
 	// +optional
 	SeccompProfile *corev1.SeccompProfile `json:"seccompProfile,omitempty"`
@@ -91,9 +102,12 @@ type Downloader struct {
 }
 
 // ModelCacheSpec defines the desired state of ModelCache
+// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="ModelCache spec is immutable after creation"
 type ModelCacheSpec struct {
+	// +kubebuilder:validation:Required
 	Source Source `json:"source"`
 
+	// +kubebuilder:validation:Required
 	Storage Storage `json:"storage"`
 
 	// +optional
@@ -109,7 +123,9 @@ const (
 
 // ModelCacheStatus defines the observed state of ModelCache.
 type ModelCacheStatus struct {
-	Phase           string `json:"phase,omitempty"`
+	// +kubebuilder:validation:Enum=Ready;Downloading;Failed;Pending
+	Phase string `json:"phase,omitempty"`
+
 	PvcName         string `json:"pvcName,omitempty"`
 	DownloadJobName string `json:"downloadJobName,omitempty"`
 

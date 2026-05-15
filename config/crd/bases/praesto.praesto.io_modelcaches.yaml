@@ -79,6 +79,9 @@ spec:
                       privileged:
                         type: boolean
                       procMount:
+                        enum:
+                        - Default
+                        - Unmasked
                         type: string
                       readOnlyRootFilesystem:
                         type: boolean
@@ -161,6 +164,7 @@ spec:
                   huggingface:
                     properties:
                       repo:
+                        minLength: 1
                         type: string
                       revision:
                         type: string
@@ -172,29 +176,43 @@ spec:
                               NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
                             properties:
                               key:
+                                minLength: 1
                                 type: string
                               name:
+                                minLength: 1
                                 type: string
                             required:
                             - key
                             - name
                             type: object
+                        required:
+                        - secretRef
                         type: object
                     required:
                     - repo
                     type: object
+                required:
+                - huggingface
                 type: object
               storage:
                 properties:
                   size:
+                    minLength: 1
                     type: string
                   storageClassName:
+                    minLength: 1
                     type: string
+                required:
+                - size
+                - storageClassName
                 type: object
             required:
             - source
             - storage
             type: object
+            x-kubernetes-validations:
+            - message: ModelCache spec is immutable after creation
+              rule: self == oldSelf
           status:
             description: status defines the observed state of ModelCache
             properties:
@@ -262,6 +280,11 @@ spec:
               downloadJobName:
                 type: string
               phase:
+                enum:
+                - Ready
+                - Downloading
+                - Failed
+                - Pending
                 type: string
               pvcName:
                 type: string
