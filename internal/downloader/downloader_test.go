@@ -163,6 +163,9 @@ func TestDownloadJobForModelCache(t *testing.T) {
 	if container.Image != DefaultDownloaderImage {
 		t.Fatalf("unexpected downloader image: %s", container.Image)
 	}
+	if container.SecurityContext != nil {
+		t.Fatalf("expected security context to be omitted by default, got %#v", container.SecurityContext)
+	}
 	if len(container.Resources.Requests) != 0 {
 		t.Fatalf("expected empty resource requests by default, got %#v", container.Resources.Requests)
 	}
@@ -182,6 +185,58 @@ func TestDownloadJobForModelCache(t *testing.T) {
 	}
 	if !containsPVCVolume(job.Spec.Template.Spec.Volumes, "model-storage", pvc.Name) {
 		t.Fatalf("expected model-storage PVC volume, got %#v", job.Spec.Template.Spec.Volumes)
+	}
+}
+
+func TestDownloadJobForModelCacheWithOptionalContainerSecurityContext(t *testing.T) {
+	modelCache := testModelCache()
+	allowPrivilegeEscalation := false
+	readOnlyRootFilesystem := true
+	runAsNonRoot := true
+	runAsUser := int64(1001)
+	runAsGroup := int64(1001)
+	seccompProfile := &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault}
+	modelCache.Spec.Downloader.ContainerSecurityContext = &praestov1alpha1.ContainerSecurityContext{
+		AllowPrivilegeEscalation: &allowPrivilegeEscalation,
+		ReadOnlyRootFilesystem:   &readOnlyRootFilesystem,
+		RunAsNonRoot:             &runAsNonRoot,
+		RunAsUser:                &runAsUser,
+		RunAsGroup:               &runAsGroup,
+		SeccompProfile:           seccompProfile,
+		Capabilities: &corev1.Capabilities{
+			Drop: []corev1.Capability{"ALL"},
+		},
+	}
+
+	job, err := DownloadJobForModelCache(modelCache, testPVC(modelCache))
+	if err != nil {
+		t.Fatalf("build Job: %v", err)
+	}
+	container := job.Spec.Template.Spec.Containers[0]
+
+	if container.SecurityContext == nil {
+		t.Fatalf("expected security context")
+	}
+	if container.SecurityContext.AllowPrivilegeEscalation == nil || *container.SecurityContext.AllowPrivilegeEscalation {
+		t.Fatalf("expected allowPrivilegeEscalation=false, got %#v", container.SecurityContext.AllowPrivilegeEscalation)
+	}
+	if container.SecurityContext.ReadOnlyRootFilesystem == nil || !*container.SecurityContext.ReadOnlyRootFilesystem {
+		t.Fatalf("expected readOnlyRootFilesystem=true, got %#v", container.SecurityContext.ReadOnlyRootFilesystem)
+	}
+	if container.SecurityContext.RunAsNonRoot == nil || !*container.SecurityContext.RunAsNonRoot {
+		t.Fatalf("expected runAsNonRoot=true, got %#v", container.SecurityContext.RunAsNonRoot)
+	}
+	if container.SecurityContext.RunAsUser == nil || *container.SecurityContext.RunAsUser != runAsUser {
+		t.Fatalf("expected runAsUser=%d, got %#v", runAsUser, container.SecurityContext.RunAsUser)
+	}
+	if container.SecurityContext.RunAsGroup == nil || *container.SecurityContext.RunAsGroup != runAsGroup {
+		t.Fatalf("expected runAsGroup=%d, got %#v", runAsGroup, container.SecurityContext.RunAsGroup)
+	}
+	if container.SecurityContext.SeccompProfile == nil || container.SecurityContext.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
+		t.Fatalf("unexpected seccomp profile: %#v", container.SecurityContext.SeccompProfile)
+	}
+	if container.SecurityContext.Capabilities == nil || len(container.SecurityContext.Capabilities.Drop) != 1 || container.SecurityContext.Capabilities.Drop[0] != "ALL" {
+		t.Fatalf("unexpected capabilities: %#v", container.SecurityContext.Capabilities)
 	}
 }
 
