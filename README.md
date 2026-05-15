@@ -338,9 +338,31 @@ The validating webhook checks simple `ModelCache` input errors on create/update:
 
 ## Installation options
 
+### Helm
+
+The recommended v0.1.0 installation path is the Helm chart:
+
+```bash
+helm install praesto ./charts/praesto --namespace praesto-system --create-namespace
+```
+
+Pin release images explicitly:
+
+```bash
+helm install praesto ./charts/praesto \
+  --namespace praesto-system \
+  --create-namespace \
+  --set image.tag=0.1.0 \
+  --set downloader.image.tag=0.1.0
+```
+
+See [`charts/praesto/README.md`](charts/praesto/README.md) for chart values and
+CRD upgrade notes.
+
 ### Kustomize
 
-The official cluster installation path is Kustomize:
+The Kustomize installation path remains available for development and direct
+manifest workflows:
 
 ```bash
 kubectl apply -k config/default

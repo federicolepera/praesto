@@ -1,0 +1,13 @@
+Praesto has been installed.
+
+Release namespace: {{ include "praesto.namespace" . }}
+Operator image: {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+
+{{- if .Values.webhooks.enabled }}
+Pod injection is namespace opt-in. Enable it for a workload namespace with:
+
+  kubectl label namespace <namespace> praesto.io/model-cache-injection=enabled
+{{- end }}
+
+CRDs are installed from charts/praesto/crds. Helm will not upgrade CRDs automatically;
+apply updated CRDs manually when upgrading Praesto.

@@ -1,0 +1,29 @@
+{{- if and .Values.webhooks.enabled .Values.webhooks.certManager.enabled .Values.webhooks.certManager.issuer.create }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "praesto.issuerName" . }}
+  namespace: {{ include "praesto.namespace" . }}
+  labels:
+    {{- include "praesto.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+{{- end }}
+{{- if and .Values.webhooks.enabled .Values.webhooks.certManager.enabled .Values.webhooks.certManager.certificate.create }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "praesto.certificateName" . }}
+  namespace: {{ include "praesto.namespace" . }}
+  labels:
+    {{- include "praesto.labels" . | nindent 4 }}
+spec:
+  dnsNames:
+  - {{ include "praesto.webhookServiceName" . }}.{{ include "praesto.namespace" . }}.svc
+  - {{ include "praesto.webhookServiceName" . }}.{{ include "praesto.namespace" . }}.svc.cluster.local
+  issuerRef:
+    kind: Issuer
+    name: {{ include "praesto.issuerName" . }}
+  secretName: {{ .Values.webhooks.certManager.certificate.secretName }}
+{{- end }}

@@ -1,0 +1,117 @@
+{{- if .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "praesto.managerRoleName" . }}
+  labels:
+    {{- include "praesto.labels" . | nindent 4 }}
+rules:
+- apiGroups: [""]
+  resources: ["persistentvolumeclaims"]
+  verbs: ["create", "delete", "get", "list", "watch"]
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+- apiGroups: ["praesto.praesto.io"]
+  resources: ["modelcaches"]
+  verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+- apiGroups: ["praesto.praesto.io"]
+  resources: ["modelcaches/finalizers"]
+  verbs: ["update"]
+- apiGroups: ["praesto.praesto.io"]
+  resources: ["modelcaches/status"]
+  verbs: ["get", "patch", "update"]
+- apiGroups: ["storage.k8s.io"]
+  resources: ["storageclasses"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ printf "%s-manager-rolebinding" (include "praesto.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "praesto.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "praesto.managerRoleName" . }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "praesto.serviceAccountName" . }}
+  namespace: {{ include "praesto.namespace" . }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ printf "%s-leader-election-role" (include "praesto.fullname" .) | trunc 63 | trimSuffix "-" }}
+  namespace: {{ include "praesto.namespace" . }}
+  labels:
+    {{- include "praesto.labels" . | nindent 4 }}
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ printf "%s-leader-election-rolebinding" (include "praesto.fullname" .) | trunc 63 | trimSuffix "-" }}
+  namespace: {{ include "praesto.namespace" . }}
+  labels:
+    {{- include "praesto.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ printf "%s-leader-election-role" (include "praesto.fullname" .) | trunc 63 | trimSuffix "-" }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "praesto.serviceAccountName" . }}
+  namespace: {{ include "praesto.namespace" . }}
+{{- if .Values.metrics.authProxy.enabled }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "praesto.metricsAuthRoleName" . }}
+  labels:
+    {{- include "praesto.labels" . | nindent 4 }}
+rules:
+- apiGroups: ["authentication.k8s.io"]
+  resources: ["tokenreviews"]
+  verbs: ["create"]
+- apiGroups: ["authorization.k8s.io"]
+  resources: ["subjectaccessreviews"]
+  verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ printf "%s-metrics-auth-rolebinding" (include "praesto.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "praesto.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "praesto.metricsAuthRoleName" . }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "praesto.serviceAccountName" . }}
+  namespace: {{ include "praesto.namespace" . }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "praesto.metricsReaderRoleName" . }}
+  labels:
+    {{- include "praesto.labels" . | nindent 4 }}
+rules:
+- nonResourceURLs: ["/metrics"]
+  verbs: ["get"]
+{{- end }}
+{{- end }}
