@@ -1,0 +1,298 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: modelcaches.praesto.praesto.io
+spec:
+  group: praesto.praesto.io
+  names:
+    kind: ModelCache
+    listKind: ModelCacheList
+    plural: modelcaches
+    singular: modelcache
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.pvcName
+      name: PVC
+      type: string
+    - jsonPath: .status.downloadJobName
+      name: Download Job
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: ModelCache is the Schema for the modelcaches API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of ModelCache
+            properties:
+              downloader:
+                properties:
+                  containerSecurityContext:
+                    properties:
+                      allowPrivilegeEscalation:
+                        type: boolean
+                      capabilities:
+                        description: Adds and removes POSIX capabilities from running
+                          containers.
+                        properties:
+                          add:
+                            description: Added capabilities
+                            items:
+                              description: Capability represent POSIX capabilities
+                                type
+                              type: string
+                            type: array
+                            x-kubernetes-list-type: atomic
+                          drop:
+                            description: Removed capabilities
+                            items:
+                              description: Capability represent POSIX capabilities
+                                type
+                              type: string
+                            type: array
+                            x-kubernetes-list-type: atomic
+                        type: object
+                      privileged:
+                        type: boolean
+                      procMount:
+                        enum:
+                        - Default
+                        - Unmasked
+                        type: string
+                      readOnlyRootFilesystem:
+                        type: boolean
+                      runAsGroup:
+                        format: int64
+                        type: integer
+                      runAsNonRoot:
+                        type: boolean
+                      runAsUser:
+                        format: int64
+                        type: integer
+                      seLinuxOptions:
+                        description: SELinuxOptions are the labels to be applied to
+                          the container
+                        properties:
+                          level:
+                            description: Level is SELinux level label that applies
+                              to the container.
+                            type: string
+                          role:
+                            description: Role is a SELinux role label that applies
+                              to the container.
+                            type: string
+                          type:
+                            description: Type is a SELinux type label that applies
+                              to the container.
+                            type: string
+                          user:
+                            description: User is a SELinux user label that applies
+                              to the container.
+                            type: string
+                        type: object
+                      seccompProfile:
+                        description: |-
+                          SeccompProfile defines a pod/container's seccomp profile settings.
+                          Only one profile source may be set.
+                        properties:
+                          localhostProfile:
+                            description: |-
+                              localhostProfile indicates a profile defined in a file on the node should be used.
+                              The profile must be preconfigured on the node to work.
+                              Must be a descending path, relative to the kubelet's configured seccomp profile location.
+                              Must be set if type is "Localhost". Must NOT be set for any other type.
+                            type: string
+                          type:
+                            description: |-
+                              type indicates which kind of seccomp profile will be applied.
+                              Valid options are:
+
+                              Localhost - a profile defined in a file on the node should be used.
+                              RuntimeDefault - the container runtime default profile should be used.
+                              Unconfined - no profile should be applied.
+                            type: string
+                        required:
+                        - type
+                        type: object
+                    type: object
+                  image:
+                    type: string
+                  resources:
+                    properties:
+                      limits:
+                        properties:
+                          cpu:
+                            type: string
+                          memory:
+                            type: string
+                        type: object
+                      requests:
+                        properties:
+                          cpu:
+                            type: string
+                          memory:
+                            type: string
+                        type: object
+                    type: object
+                type: object
+              source:
+                properties:
+                  huggingface:
+                    properties:
+                      repo:
+                        minLength: 1
+                        type: string
+                      revision:
+                        type: string
+                      token:
+                        properties:
+                          secretRef:
+                            description: |-
+                              EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
+                              NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
+                            properties:
+                              key:
+                                minLength: 1
+                                type: string
+                              name:
+                                minLength: 1
+                                type: string
+                            required:
+                            - key
+                            - name
+                            type: object
+                        required:
+                        - secretRef
+                        type: object
+                    required:
+                    - repo
+                    type: object
+                required:
+                - huggingface
+                type: object
+              storage:
+                properties:
+                  size:
+                    minLength: 1
+                    type: string
+                  storageClassName:
+                    minLength: 1
+                    type: string
+                required:
+                - size
+                - storageClassName
+                type: object
+            required:
+            - source
+            - storage
+            type: object
+            x-kubernetes-validations:
+            - message: ModelCache spec is immutable after creation
+              rule: self == oldSelf
+          status:
+            description: status defines the observed state of ModelCache
+            properties:
+              conditions:
+                description: Conditions represent the latest available observations
+                  of the ModelCache state.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              downloadJobName:
+                type: string
+              phase:
+                enum:
+                - Ready
+                - Downloading
+                - Failed
+                - Pending
+                type: string
+              pvcName:
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

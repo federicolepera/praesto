@@ -1,0 +1,68 @@
+{{- if .Values.webhooks.enabled }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ printf "%s-mutating-webhook-configuration" (include "praesto.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "praesto.labels" . | nindent 4 }}
+  {{- if .Values.webhooks.certManager.enabled }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ include "praesto.webhookCABundleAnnotation" . | quote }}
+  {{- end }}
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: {{ include "praesto.webhookServiceName" . }}
+      namespace: {{ include "praesto.namespace" . }}
+      path: /mutate-v1-pod
+  failurePolicy: {{ .Values.webhooks.failurePolicy }}
+  name: mpod.praesto.io
+  {{- with .Values.webhooks.mutating.namespaceSelector }}
+  namespaceSelector:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+  - apiGroups:
+    - ""
+    apiVersions:
+    - v1
+    operations:
+    - CREATE
+    resources:
+    - pods
+  sideEffects: None
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ printf "%s-validating-webhook-configuration" (include "praesto.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "praesto.labels" . | nindent 4 }}
+  {{- if .Values.webhooks.certManager.enabled }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ include "praesto.webhookCABundleAnnotation" . | quote }}
+  {{- end }}
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: {{ include "praesto.webhookServiceName" . }}
+      namespace: {{ include "praesto.namespace" . }}
+      path: /validate-praesto-praesto-io-v1alpha1-modelcache
+  failurePolicy: {{ .Values.webhooks.failurePolicy }}
+  name: vmodelcache-v1alpha1.praesto.io
+  rules:
+  - apiGroups:
+    - praesto.praesto.io
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - modelcaches
+  sideEffects: None
+{{- end }}

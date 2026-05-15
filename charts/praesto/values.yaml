@@ -1,0 +1,86 @@
+nameOverride: ""
+fullnameOverride: ""
+
+namespaceOverride: ""
+
+image:
+  repository: ghcr.io/federicolepera/praesto
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+replicaCount: 1
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 128Mi
+  requests:
+    cpu: 10m
+    memory: 64Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+leaderElection:
+  enabled: true
+
+metrics:
+  enabled: true
+  bindAddress: ":8443"
+  service:
+    port: 8443
+  authProxy:
+    enabled: true
+
+webhooks:
+  enabled: true
+  certManager:
+    enabled: true
+    issuer:
+      create: true
+      name: ""
+    certificate:
+      create: true
+      name: ""
+      secretName: webhook-server-cert
+  service:
+    port: 443
+    targetPort: 9443
+  failurePolicy: Fail
+  mutating:
+    namespaceSelector:
+      matchLabels:
+        praesto.io/model-cache-injection: enabled
+
+rbac:
+  create: true
+  aggregateRoles:
+    create: true
+
+downloader:
+  image:
+    repository: ghcr.io/federicolepera/praesto/downloader
+    tag: "0.1.0"
