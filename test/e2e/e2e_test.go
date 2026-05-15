@@ -359,13 +359,13 @@ subjects:
 			Eventually(verifyCAInjection).Should(Succeed())
 		})
 
-		It("should reject invalid ModelCache resources through the validating webhook", func() {
-			By("applying an invalid ModelCache")
+		It("should reject invalid ModelCache resources", func() {
+			By("applying a ModelCache rejected by the CRD schema")
 			output, err := kubectlApplyYAML(fmt.Sprintf(`
 apiVersion: praesto.praesto.io/v1alpha1
 kind: ModelCache
 metadata:
-  name: invalid-modelcache
+  name: invalid-schema-modelcache
   namespace: %s
 spec:
   source:
@@ -373,11 +373,29 @@ spec:
       repo: ""
   storage:
     storageClassName: standard
-    size: "0"
+    size: 1Gi
 `, workloadNamespace))
 
 			Expect(err).To(HaveOccurred(), "invalid ModelCache should be rejected")
 			Expect(output).To(ContainSubstring("spec.source.huggingface.repo"))
+
+			By("applying a ModelCache rejected by the validating webhook")
+			output, err = kubectlApplyYAML(fmt.Sprintf(`
+apiVersion: praesto.praesto.io/v1alpha1
+kind: ModelCache
+metadata:
+  name: invalid-webhook-modelcache
+  namespace: %s
+spec:
+  source:
+    huggingface:
+      repo: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+  storage:
+    storageClassName: standard
+    size: "0"
+`, workloadNamespace))
+
+			Expect(err).To(HaveOccurred(), "invalid ModelCache should be rejected")
 			Expect(output).To(ContainSubstring("spec.storage.size"))
 		})
 
