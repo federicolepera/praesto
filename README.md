@@ -1,53 +1,117 @@
 <h1 align="center">Praesto</h1>
 
-<hr />
+<h3 align="center">
+  <a name="readme-top"></a>
+  <img
+    src="docs/images/praesto.png"
+    alt="Praesto"
+    width="700"
+  >
+</h3>
+
+<div align="center">
 
 <p align="center">
-  <img src="docs/images/praesto.png" alt="Praesto hero illustration" width="700" />
+  Kubernetes-native model cache operator for preparing AI model artifacts once, storing them in shared volumes, and mounting them into workloads through simple Pod annotations.
 </p>
 
-<p align="center">Kubernetes-native model cache operator for preparing and mounting AI models into workloads.</p>
+<div align="center">
+  <a href="https://github.com/federicolepera/praesto/blob/main/LICENSE">
+    <img src="https://img.shields.io/github/license/federicolepera/praesto" alt="License">
+  </a>
+  <a href="https://github.com/federicolepera/praesto/releases">
+    <img src="https://img.shields.io/github/v/release/federicolepera/praesto" alt="Release">
+  </a>
+  <a href="https://goreportcard.com/report/github.com/federicolepera/praesto">
+    <img src="https://goreportcard.com/badge/github.com/federicolepera/praesto" alt="Go Report Card">
+  </a>
+</div>
 
-<p align="center">
-  <a href="https://opensource.org/licenses/Apache-2.0"><img alt="License" src="https://img.shields.io/badge/License-Apache%202.0-blue.svg"></a>
-  <a href="https://kubernetes.io"><img alt="Kubernetes" src="https://img.shields.io/badge/Kubernetes-1.20%2B-brightgreen.svg"></a>
-  <a href="https://goreportcard.com/report/github.com/federicolepera/praesto"><img alt="Go Report Card" src="https://goreportcard.com/badge/github.com/federicolepera/praesto"></a>
-</p>
+<div align="center">
+  <a href="https://ghcr.io/federicolepera/praesto">
+    <img src="https://img.shields.io/badge/ghcr.io-praesto-blue" alt="GitHub Container Registry">
+  </a>
+  <a href="https://kubernetes.io/">
+    <img src="https://img.shields.io/badge/kubernetes-operator-326CE5?logo=kubernetes&logoColor=white" alt="Kubernetes">
+  </a>
+  <a href="https://github.com/federicolepera/praesto/pkgs/container/praesto%2Fcharts%2Fpraesto">
+    <img src="https://img.shields.io/badge/helm-chart-0F1689?logo=helm&logoColor=white" alt="Helm Chart">
+  </a>
+</div>
+</div>
 
-<p align="center">
-  <a href="#what-praesto-does">What it does</a> ·
-  <a href="#quick-start">Quick start</a> ·
-  <a href="#modelcache-resources">ModelCache</a> ·
-  <a href="#admission-webhooks">Webhooks</a> ·
-  <a href="#local-webhook-debugging">Debugging</a> ·
-  <a href="#development">Development</a>
-</p>
+## Table of Contents
+- [What is Praesto?](#what-is-praesto)
+- [How it Works](#how-it-works)
+- [Quickstart](#quickstart)
+  - [Prerequisites](#prerequisites)
+  - [Helm](#helm)
+  - [Kustomize](#kustomize)
+  - [Create a ModelCache](#create-a-modelcache)
+  - [Mount the ModelCache in a workload](#mount-the-modelcache-in-a-workload)
+  - [Verify the mounted files](#verify-the-mounted-files)
+- [ModelCache Resources](#modelcache-resources)
+- [Admission Webhooks](#admission-webhooks)
+- [Configuration](#configuration)
+  - [Helm Values](#helm-values)
+  - [Pod Annotations](#pod-annotations)
+  - [Downloader Settings](#downloader-settings)
+- [Samples](#samples)
+- [Local Development](#local-development)
+- [Local Webhook Debugging](#local-webhook-debugging)
+- [Requirements](#requirements)
+- [Current Limitations](#current-limitations)
+- [Contributing](#contributing)
+- [License](#license)
 
-## What Praesto does
+## What is Praesto?
 
-- Defines reusable model caches as Kubernetes custom resources.
-- Creates a ReadWriteMany PVC for each `ModelCache`.
-- Runs a downloader Job that prepares model files into the PVC.
-- Tracks cache readiness through Kubernetes status fields and conditions.
-- Mutates annotated Pods to mount a ready model cache PVC automatically.
-- Provides a lightweight quick start workload that verifies the mounted model files.
-- Uses Kustomize and cert-manager for the official cluster installation.
-- Provides local webhook debug targets for running the manager from an IDE/debugger.
+**Praesto** is a Kubernetes operator that makes AI model artifacts reusable across workloads.
 
-## Quick start
+Instead of downloading the same model inside every Pod, Praesto lets you define a `ModelCache` custom resource. The operator creates storage, runs a downloader Job, tracks readiness, and then injects the resulting volume into annotated Pods.
 
-The quick start validates the complete v0.1.0 flow:
+Praesto is currently focused on a small, practical v0.1.0 workflow:
+
+- **ModelCache CRD**: declare which model should be cached.
+- **Shared PVC**: store model files in a ReadWriteMany volume.
+- **Downloader Job**: prepare HuggingFace model files into the PVC.
+- **Status conditions**: expose lifecycle state through Kubernetes-native status.
+- **Pod injection**: mount ready caches into workloads using annotations.
+- **Helm and Kustomize installs**: deploy the operator, RBAC, CRDs, services, and webhooks.
+
+## How it Works
+
+```text
+ModelCache
+  ↓
+ReadWriteMany PVC
+  ↓
+Downloader Job
+  ↓
+Ready status
+  ↓
+Annotated Pod
+  ↓
+Read-only model mount
+```
+
+Praesto reconciles each `ModelCache` by creating a PVC named `praesto-<modelcache-name>` and a downloader Job named `praesto-download-<modelcache-name>`. Once the Job completes, workloads can request the cache with Pod annotations.
+
+## Quickstart
+
+The quickstart validates the full flow:
 
 ```text
 ModelCache → PVC → downloader Job → Ready status → annotated Deployment → mounted model files
 ```
 
-### 1. Prerequisites
+### Prerequisites
 
 You need:
 
 - a Kubernetes cluster
 - `kubectl`
+- `helm` if installing via the Helm chart
 - cert-manager installed in the cluster
 - a StorageClass that supports `ReadWriteMany`
 
@@ -63,7 +127,38 @@ If your cluster uses a different RWX StorageClass, edit:
 config/samples/quickstart/00-modelcache-tinyllama.yaml
 ```
 
-### 2. Install Praesto
+### Helm
+
+Install Praesto with the local chart:
+
+```bash
+helm install praesto ./charts/praesto \
+  --namespace praesto-system \
+  --create-namespace
+```
+
+Pin release images explicitly:
+
+```bash
+helm install praesto ./charts/praesto \
+  --namespace praesto-system \
+  --create-namespace \
+  --set image.tag=0.1.0 \
+  --set downloader.image.tag=0.1.0
+```
+
+The chart can also be published and installed as an OCI Helm package from GHCR:
+
+```bash
+helm install praesto oci://ghcr.io/federicolepera/praesto/charts/praesto \
+  --version 0.1.0 \
+  --namespace praesto-system \
+  --create-namespace
+```
+
+See [`charts/praesto/README.md`](charts/praesto/README.md) for the full values reference and CRD upgrade notes.
+
+### Kustomize
 
 Install CRDs, RBAC, controller, webhook service, and cert-manager webhook certificates:
 
@@ -78,19 +173,15 @@ For reproducible installs, pin a release tag instead:
 make deploy IMG=ghcr.io/federicolepera/praesto:0.1.0
 ```
 
-Use `make deploy IMG=...` for local builds, private registries, or any custom
-operator image override. The generated manifests still support normal Kustomize
-image replacement.
-
 Wait for the controller manager:
 
 ```bash
 kubectl get pods -n praesto-system
 ```
 
-### 3. Create a ModelCache
+### Create a ModelCache
 
-The quick start creates a `ModelCache` for TinyLlama:
+The quickstart creates a `ModelCache` for TinyLlama:
 
 ```yaml
 apiVersion: praesto.praesto.io/v1alpha1
@@ -120,7 +211,7 @@ Watch the lifecycle:
 kubectl get modelcache tinyllama-test -w
 ```
 
-You can also inspect the generated PVC and Job:
+Inspect the generated PVC and Job:
 
 ```bash
 kubectl get pvc
@@ -135,7 +226,7 @@ NAME             PHASE   PVC                     DOWNLOAD JOB
 tinyllama-test   Ready   praesto-tinyllama-test  praesto-download-tinyllama-test
 ```
 
-### 4. Create a workload that uses the model cache
+### Mount the ModelCache in a workload
 
 Enable Praesto Pod injection in the workload namespace:
 
@@ -160,7 +251,7 @@ praesto.io/model-mount-path: /models
 
 The mutating webhook uses them to mount the generated PVC read-only into the Pod.
 
-### 5. Verify that the mounted model works
+### Verify the mounted files
 
 Check logs:
 
@@ -175,9 +266,7 @@ Tokenizer loaded from /models
 {'input_ids': [...], 'attention_mask': [...]}
 ```
 
-This test intentionally loads only the HuggingFace tokenizer. It is lightweight
-enough for local clusters such as minikube and proves that the workload can read
-valid model files from the Praesto-mounted cache.
+This test intentionally loads only the HuggingFace tokenizer. It is lightweight enough for local clusters such as minikube and proves that the workload can read valid model files from the Praesto-mounted cache.
 
 Inspect the mutated Pod if needed:
 
@@ -192,34 +281,16 @@ kubectl exec -it deploy/praesto-tokenizer-test -- /bin/sh
 ls -lah /models
 ```
 
-### 6. Cleanup
+Cleanup:
 
 ```bash
 kubectl delete -f config/samples/quickstart/01-tokenizer-deployment.yaml
 kubectl delete -f config/samples/quickstart/00-modelcache-tinyllama.yaml
 ```
 
-## Samples
+## ModelCache Resources
 
-Samples live under:
-
-```text
-config/samples/
-```
-
-Current quick start samples:
-
-| File | Purpose |
-|------|---------|
-| `config/samples/quickstart/00-modelcache-tinyllama.yaml` | Creates the TinyLlama `ModelCache` |
-| `config/samples/quickstart/01-tokenizer-deployment.yaml` | Creates a lightweight tokenizer workload that uses the cache |
-
-## ModelCache resources
-
-A `ModelCache` describes a model that should be downloaded and made available to
-workloads through a Kubernetes volume.
-
-Example:
+A `ModelCache` describes a model that should be downloaded and made available to workloads through a Kubernetes volume.
 
 ```yaml
 apiVersion: praesto.praesto.io/v1alpha1
@@ -237,19 +308,16 @@ spec:
     size: 10Gi
 ```
 
-Praesto reconciles this resource by creating:
+Praesto creates:
 
 - a PVC named `praesto-<modelcache-name>`
 - a downloader Job named `praesto-download-<modelcache-name>`
 
 The downloader Job starts only after the PVC is bound.
 
-Praesto verifies that `spec.storage.storageClassName` exists before creating the
-PVC. If the StorageClass is missing, the `ModelCache` moves to `Failed` with a
-`PVCReady=False` condition reason `StorageClassNotFound`. Kubernetes does not
-expose a generic way to know whether a StorageClass supports `ReadWriteMany`, so
-PVCs that remain pending include a status message that points users to verify
-RWX support for the configured StorageClass.
+Praesto verifies that `spec.storage.storageClassName` exists before creating the PVC. If the StorageClass is missing, the `ModelCache` moves to `Failed` with a `PVCReady=False` condition reason `StorageClassNotFound`.
+
+Kubernetes does not expose a generic way to know whether a StorageClass supports `ReadWriteMany`, so PVCs that remain pending include a status message that points users to verify RWX support for the configured StorageClass.
 
 ### Status
 
@@ -279,7 +347,7 @@ Current conditions:
 | `DownloadComplete` | The downloader Job completed successfully |
 | `Ready` | The model cache is ready to be mounted by workloads |
 
-## Admission webhooks
+## Admission Webhooks
 
 Praesto uses admission webhooks for two workflows.
 
@@ -293,8 +361,7 @@ Before creating annotated Pods, enable injection in the workload namespace:
 kubectl label namespace <namespace> praesto.io/model-cache-injection=enabled
 ```
 
-Namespaces without this label are ignored by the mutating webhook. This keeps
-unrelated workloads from depending on Praesto webhook availability.
+Namespaces without this label are ignored by the mutating webhook. This keeps unrelated workloads from depending on Praesto webhook availability.
 
 Required annotation:
 
@@ -302,7 +369,7 @@ Required annotation:
 praesto.io/model-cache: tinyllama-test
 ```
 
-Optional annotation:
+Optional annotations:
 
 ```yaml
 praesto.io/model-mount-path: /models
@@ -310,10 +377,7 @@ praesto.io/target-container: app
 ```
 
 If the mount path is omitted, Praesto uses `/models`.
-If the target container is omitted, Praesto mounts the cache into the first
-container in the Pod spec. For multi-container Pods, set
-`praesto.io/target-container` on the Pod template to choose the application
-container explicitly.
+If the target container is omitted, Praesto mounts the cache into the first container in the Pod spec. For multi-container Pods, set `praesto.io/target-container` explicitly.
 
 The webhook:
 
@@ -322,61 +386,81 @@ The webhook:
 - injects the generated PVC as a read-only volume
 - mounts it into the target container, or the first container when no target is configured
 
-The webhook uses `failurePolicy: Fail` inside opt-in namespaces. If Praesto is
-unavailable, annotated Pods in enabled namespaces are rejected instead of running
-without their model cache.
+The webhook uses `failurePolicy: Fail` inside opt-in namespaces. If Praesto is unavailable, annotated Pods in enabled namespaces are rejected instead of running without their model cache.
 
 ### Validating ModelCache webhook
 
-The validating webhook checks simple `ModelCache` input errors on create/update:
+The validating webhook checks `ModelCache` input errors on create and update:
 
 - `spec.storage.storageClassName` is required
 - `spec.storage.size` is required
 - `spec.storage.size` must be a valid Kubernetes quantity greater than zero
 - `spec.source.huggingface.repo` is required
 - HuggingFace token `secretRef.name` and `secretRef.key` must be configured together
+- `spec` is immutable after creation
 
-## Installation options
+## Configuration
 
-### Helm
+Praesto is configured primarily through Kubernetes manifests, Helm values, and Pod annotations.
 
-The recommended v0.1.0 installation path is the Helm chart:
+### Helm Values
 
-```bash
-helm install praesto ./charts/praesto --namespace praesto-system --create-namespace
+Common chart values:
+
+| Value | Description | Default |
+|-------|-------------|---------|
+| `image.repository` | Operator image repository | `ghcr.io/federicolepera/praesto` |
+| `image.tag` | Operator image tag | Chart app version |
+| `downloader.image.repository` | Default downloader image repository | `ghcr.io/federicolepera/praesto/downloader` |
+| `downloader.image.tag` | Default downloader image tag | Chart app version |
+| `webhooks.enabled` | Install admission webhooks | `true` |
+| `certManager.enabled` | Create cert-manager issuer/certificate resources | `true` |
+| `metrics.enabled` | Expose metrics service and RBAC | `true` |
+
+See [`charts/praesto/values.yaml`](charts/praesto/values.yaml) and [`charts/praesto/README.md`](charts/praesto/README.md) for all options.
+
+### Pod Annotations
+
+| Annotation | Required | Description |
+|------------|----------|-------------|
+| `praesto.io/model-cache` | Yes | Name of the `ModelCache` to mount |
+| `praesto.io/model-mount-path` | No | Mount path inside the target container. Defaults to `/models` |
+| `praesto.io/target-container` | No | Container name to mutate. Defaults to the first container |
+
+### Downloader Settings
+
+`ModelCache.spec.downloader` can customize the downloader Job, including image, resource requests/limits, and container security context.
+
+Example:
+
+```yaml
+spec:
+  downloader:
+    image: ghcr.io/federicolepera/praesto/downloader:0.1.0
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        memory: 1Gi
 ```
 
-Pin release images explicitly:
+## Samples
 
-```bash
-helm install praesto ./charts/praesto \
-  --namespace praesto-system \
-  --create-namespace \
-  --set image.tag=0.1.0 \
-  --set downloader.image.tag=0.1.0
+Samples live under:
+
+```text
+config/samples/
 ```
 
-See [`charts/praesto/README.md`](charts/praesto/README.md) for chart values and
-CRD upgrade notes.
+Current quickstart samples:
 
-### Kustomize
+| File | Purpose |
+|------|---------|
+| `config/samples/quickstart/00-modelcache-tinyllama.yaml` | Creates the TinyLlama `ModelCache` |
+| `config/samples/quickstart/01-tokenizer-deployment.yaml` | Creates a lightweight tokenizer workload that uses the cache |
 
-The Kustomize installation path remains available for development and direct
-manifest workflows:
-
-```bash
-kubectl apply -k config/default
-```
-
-This path expects cert-manager to be installed because Praesto uses admission
-webhooks. It uses the published `ghcr.io/federicolepera/praesto:latest` operator
-image by default. To pin a release or deploy a custom build, use:
-
-```bash
-make deploy IMG=ghcr.io/federicolepera/praesto:0.1.0
-```
-
-### Local development without webhooks
+## Local Development
 
 Install only the CRDs:
 
@@ -390,11 +474,37 @@ Run the controller locally against your current kubeconfig:
 make run
 ```
 
-## Local webhook debugging
+Common commands:
 
-For webhook debugging, run the manager locally from your IDE/debugger and install
-webhook configurations that point directly to your local machine instead of the
-in-cluster webhook Service.
+```bash
+# Build the operator
+make build
+
+# Run tests
+make test
+
+# Run lint
+make lint
+
+# Generate manifests and CRDs
+make manifests
+
+# Generate deepcopy code
+make generate
+
+# Build an operator image
+make docker-build IMG=ghcr.io/federicolepera/praesto:dev
+
+# Deploy the controller to the current cluster
+make deploy IMG=ghcr.io/federicolepera/praesto:dev
+
+# Remove the controller from the current cluster
+make undeploy
+```
+
+## Local Webhook Debugging
+
+For webhook debugging, run the manager locally from your IDE/debugger and install webhook configurations that point directly to your local machine instead of the in-cluster webhook Service.
 
 Create local certificates:
 
@@ -414,8 +524,7 @@ Install the local mutating webhook configuration:
 make mutatingwebhook
 ```
 
-The local mutating webhook uses the same namespace opt-in as the cluster
-installation. Label any namespace you want to debug:
+The local mutating webhook uses the same namespace opt-in as the cluster installation. Label any namespace you want to debug:
 
 ```bash
 kubectl label namespace <namespace> praesto.io/model-cache-injection=enabled
@@ -466,66 +575,32 @@ make mutatingwebhook-delete
 
 | Requirement | Notes |
 |-------------|-------|
-| Kubernetes 1.20+ | CRDs, Jobs, PVCs, and admission webhooks |
-| cert-manager | Required by the official Kustomize webhook installation |
+| Kubernetes | CRDs, Jobs, PVCs, and admission webhooks |
+| cert-manager | Required by the default Helm/Kustomize webhook installation |
 | ReadWriteMany-capable StorageClass | Required for sharing model caches across workloads |
 | kubectl | Required for local install and debug workflows |
+| helm | Required for Helm chart installation |
 | OpenSSL | Required for local webhook certificate generation |
 
-## Development
+## Current Limitations
 
-```bash
-# Run the controller locally against your current kubeconfig
-make run
-
-# Build the operator
-make build
-
-# Run tests
-make test
-
-# Run lint
-make lint
-
-# Build an operator image
-make docker-build IMG=ghcr.io/federicolepera/praesto:dev
-```
-
-Useful development commands:
-
-```bash
-# Generate manifests and CRDs
-make manifests
-
-# Generate deepcopy code
-make generate
-
-# Install CRDs into the current cluster
-make install
-
-# Uninstall CRDs from the current cluster
-make uninstall
-
-# Deploy the controller to the current cluster
-make deploy IMG=ghcr.io/federicolepera/praesto:dev
-
-# Remove the controller from the current cluster
-make undeploy
-```
-
-## Current limitations
-
-- Praesto is currently early-stage and focused on the v0.1.0 workflow.
+- Praesto is early-stage and focused on the v0.1.0 workflow.
 - The downloader flow is intentionally simple and may change.
-- `ModelCache.spec` is immutable after creation. To change source, storage, or
-  downloader settings, delete and recreate the `ModelCache`.
+- `ModelCache.spec` is immutable after creation. To change source, storage, or downloader settings, delete and recreate the `ModelCache`.
 - Multi-container Pods should set `praesto.io/target-container`; otherwise the mutating webhook mounts the cache into the first container.
 - The mutating webhook expects a ready `ModelCache` in the same namespace as the Pod.
 - The mutating webhook only runs in namespaces labeled `praesto.io/model-cache-injection=enabled`.
-- The official installation path currently uses Kustomize, not Helm.
-- Storage must be provided by a user-managed RWX-capable StorageClass. Praesto
-  validates StorageClass existence, but RWX support is diagnosed from PVC
-  pending status because it is provisioner-specific.
+- Storage must be provided by a user-managed RWX-capable StorageClass. Praesto validates StorageClass existence, but RWX support is diagnosed from PVC pending status because it is provisioner-specific.
+
+## Contributing
+
+Contributions are welcome. Please:
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Run relevant checks (`make lint`, `make test`, Helm rendering when chart files change)
+5. Submit a pull request with a clear description
 
 ## License
 
