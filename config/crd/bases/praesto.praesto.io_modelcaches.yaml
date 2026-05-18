@@ -159,6 +159,10 @@ spec:
                         type: object
                     type: object
                 type: object
+              nodeSelector:
+                additionalProperties:
+                  type: string
+                type: object
               source:
                 properties:
                   huggingface:
@@ -279,6 +283,15 @@ spec:
                 x-kubernetes-list-type: map
               downloadJobName:
                 type: string
+              downloadingNodes:
+                format: int32
+                type: integer
+              failedNodes:
+                format: int32
+                type: integer
+              pendingNodes:
+                format: int32
+                type: integer
               phase:
                 enum:
                 - Ready
@@ -288,6 +301,12 @@ spec:
                 type: string
               pvcName:
                 type: string
+              readyNodes:
+                format: int32
+                type: integer
+              totalNodes:
+                format: int32
+                type: integer
             type: object
         required:
         - spec

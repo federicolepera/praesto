@@ -29,6 +29,7 @@ rules:
 - apiGroups:
   - praesto.praesto.io
   resources:
+  - modelcachenodes
   - modelcaches
   verbs:
   - create
@@ -41,12 +42,14 @@ rules:
 - apiGroups:
   - praesto.praesto.io
   resources:
+  - modelcachenodes/finalizers
   - modelcaches/finalizers
   verbs:
   - update
 - apiGroups:
   - praesto.praesto.io
   resources:
+  - modelcachenodes/status
   - modelcaches/status
   verbs:
   - get
