@@ -112,6 +112,8 @@ type ModelCacheSpec struct {
 
 	// +optional
 	Downloader Downloader `json:"downloader,omitempty"`
+
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 }
 
 const (
@@ -128,6 +130,12 @@ type ModelCacheStatus struct {
 
 	PvcName         string `json:"pvcName,omitempty"`
 	DownloadJobName string `json:"downloadJobName,omitempty"`
+
+	TotalNodes       int32 `json:"totalNodes,omitempty"`
+	ReadyNodes       int32 `json:"readyNodes,omitempty"`
+	DownloadingNodes int32 `json:"downloadingNodes,omitempty"`
+	FailedNodes      int32 `json:"failedNodes,omitempty"`
+	PendingNodes     int32 `json:"pendingNodes,omitempty"`
 
 	// Conditions represent the latest available observations of the ModelCache state.
 	// +patchMergeKey=type

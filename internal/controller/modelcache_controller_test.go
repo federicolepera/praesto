@@ -268,6 +268,74 @@ var _ = Describe("ModelCache Controller", func() {
 		terminatingPVC.Finalizers = nil
 		Expect(k8sClient.Update(ctx, terminatingPVC)).To(Succeed())
 	})
+
+	It("creates cluster-scoped ModelCacheNodes with logical ModelCache references", func() {
+		localModelCacheName := fmt.Sprintf("node-cache-%s", rand.String(8))
+		localModelCacheKey := types.NamespacedName{Name: localModelCacheName, Namespace: namespace}
+		nodeName := fmt.Sprintf("worker-%s", rand.String(8))
+		praestoStorageClassName := "praesto.storage.csi.io"
+
+		praestoStorageClass := testStorageClass(praestoStorageClassName)
+		if err := k8sClient.Create(ctx, praestoStorageClass); err != nil {
+			Expect(errors.IsAlreadyExists(err)).To(BeTrue())
+		}
+		DeferCleanup(func() {
+			storageClass := &storagev1.StorageClass{}
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: praestoStorageClassName}, storageClass); err == nil {
+				_ = k8sClient.Delete(ctx, storageClass)
+			}
+		})
+
+		node := &corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:   nodeName,
+				Labels: map[string]string{"praesto.io/cache-node": "true"},
+			},
+		}
+		Expect(k8sClient.Create(ctx, node)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, node) })
+
+		mc := &praestov1alpha1.ModelCache{
+			ObjectMeta: metav1.ObjectMeta{Name: localModelCacheName, Namespace: namespace},
+			Spec: praestov1alpha1.ModelCacheSpec{
+				Source: praestov1alpha1.Source{Huggingface: praestov1alpha1.HuggingfaceSource{
+					Repo:  "org/model",
+					Token: praestov1alpha1.Token{SecretRef: praestov1alpha1.SecretRef{Name: "hf-secret", Key: "token"}},
+				}},
+				Storage: praestov1alpha1.Storage{
+					StorageClassName: praestoStorageClassName,
+					Size:             "1Gi",
+				},
+				NodeSelector: map[string]string{"praesto.io/cache-node": "true"},
+			},
+		}
+		Expect(k8sClient.Create(ctx, mc)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, mc) })
+
+		controllerReconciler := &ModelCacheReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+		_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: localModelCacheKey})
+		Expect(err).NotTo(HaveOccurred())
+
+		createdNode := &praestov1alpha1.ModelCacheNode{}
+		modelCacheNodeKey := types.NamespacedName{Name: modelCacheNodeName(mc, nodeName)}
+		Eventually(func() error {
+			return k8sClient.Get(ctx, modelCacheNodeKey, createdNode)
+		}).Should(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, createdNode) })
+
+		Expect(createdNode.Namespace).To(BeEmpty())
+		Expect(createdNode.Spec.ModelCacheRef.Namespace).To(Equal(namespace))
+		Expect(createdNode.Spec.ModelCacheRef.Name).To(Equal(localModelCacheName))
+		Expect(createdNode.Spec.ModelCacheRef.UID).To(Equal(string(mc.UID)))
+		Expect(createdNode.Spec.NodeName).To(Equal(nodeName))
+		Expect(createdNode.Labels).To(HaveKeyWithValue(modelCacheNodeModelNamespaceLabel, namespace))
+		Expect(createdNode.Labels).To(HaveKeyWithValue(modelCacheNodeModelNameLabel, localModelCacheName))
+
+		Expect(k8sClient.Get(ctx, localModelCacheKey, mc)).To(Succeed())
+		Expect(mc.Status.TotalNodes).To(Equal(int32(1)))
+		Expect(mc.Status.PendingNodes).To(Equal(int32(1)))
+		Expect(mc.Status.Phase).To(Equal(praestov1alpha1.ModelCachePhasePending))
+	})
 })
 
 func validPVCSpec() corev1.PersistentVolumeClaimSpec {
