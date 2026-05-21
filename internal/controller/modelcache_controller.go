@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -39,6 +40,7 @@ import (
 )
 
 const (
+	modelCacheFinalizer               = "praesto.io/modelcache-finalizer"
 	modelCacheNodeModelNamespaceLabel = "praesto.io/model-cache-namespace"
 	modelCacheNodeModelNameLabel      = "praesto.io/model-cache-name"
 	modelCacheNodeModelUIDLabel       = "praesto.io/model-cache-uid"
@@ -81,6 +83,18 @@ func (r *ModelCacheReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 		logger.Error(err, "unable to fetch ModelCache")
 		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	if !modelCache.DeletionTimestamp.IsZero() {
+		return r.reconcileModelCacheDelete(ctx, &modelCache)
+	}
+
+	if !controllerutil.ContainsFinalizer(&modelCache, modelCacheFinalizer) {
+		controllerutil.AddFinalizer(&modelCache, modelCacheFinalizer)
+		if err := r.Update(ctx, &modelCache); err != nil {
+			logger.Error(err, "unable to add ModelCache finalizer")
+			return ctrl.Result{}, err
+		}
 	}
 
 	if modelCache.Status.Phase == praestov1alpha1.ModelCachePhaseReady {
@@ -264,6 +278,50 @@ func (r *ModelCacheReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 		return ctrl.Result{}, nil
 	}
+}
+
+func (r *ModelCacheReconciler) reconcileModelCacheDelete(ctx context.Context, modelCache *praestov1alpha1.ModelCache) (ctrl.Result, error) {
+	logger := logf.FromContext(ctx)
+	if !controllerutil.ContainsFinalizer(modelCache, modelCacheFinalizer) {
+		return ctrl.Result{}, nil
+	}
+
+	modelCacheNodes, err := r.listModelCacheNodesForModelCache(ctx, modelCache)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if len(modelCacheNodes.Items) > 0 {
+		for i := range modelCacheNodes.Items {
+			modelCacheNode := &modelCacheNodes.Items[i]
+			if modelCacheNode.DeletionTimestamp.IsZero() {
+				if err := r.Delete(ctx, modelCacheNode); err != nil && !apierrors.IsNotFound(err) {
+					return ctrl.Result{}, err
+				}
+				logger.Info("Deleted ModelCacheNode while deleting ModelCache", "modelCacheNode", modelCacheNode.Name)
+			}
+		}
+		return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+	}
+
+	controllerutil.RemoveFinalizer(modelCache, modelCacheFinalizer)
+	if err := r.Update(ctx, modelCache); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{}, nil
+}
+
+func (r *ModelCacheReconciler) listModelCacheNodesForModelCache(ctx context.Context, modelCache *praestov1alpha1.ModelCache) (*praestov1alpha1.ModelCacheNodeList, error) {
+	modelCacheNodes := &praestov1alpha1.ModelCacheNodeList{}
+	labels := client.MatchingLabels{
+		modelCacheNodeModelNamespaceLabel: modelCache.Namespace,
+		modelCacheNodeModelNameLabel:      modelCache.Name,
+		modelCacheNodeModelUIDLabel:       string(modelCache.UID),
+	}
+	if err := r.List(ctx, modelCacheNodes, labels); err != nil {
+		return nil, err
+	}
+	return modelCacheNodes, nil
 }
 
 func (r *ModelCacheReconciler) ensureModelCacheNode(ctx context.Context, modelCache *praestov1alpha1.ModelCache, nodeName string) (*praestov1alpha1.ModelCacheNode, error) {

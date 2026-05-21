@@ -336,6 +336,90 @@ var _ = Describe("ModelCache Controller", func() {
 		Expect(mc.Status.PendingNodes).To(Equal(int32(1)))
 		Expect(mc.Status.Phase).To(Equal(praestov1alpha1.ModelCachePhasePending))
 	})
+
+	It("deletes ModelCacheNodes and waits before removing the ModelCache finalizer", func() {
+		localModelCacheName := fmt.Sprintf("delete-cache-%s", rand.String(8))
+		localModelCacheKey := types.NamespacedName{Name: localModelCacheName, Namespace: namespace}
+		nodeName := fmt.Sprintf("worker-%s", rand.String(8))
+		praestoStorageClassName := "praesto.storage.csi.io"
+
+		praestoStorageClass := testStorageClass(praestoStorageClassName)
+		if err := k8sClient.Create(ctx, praestoStorageClass); err != nil {
+			Expect(errors.IsAlreadyExists(err)).To(BeTrue())
+		}
+		DeferCleanup(func() {
+			storageClass := &storagev1.StorageClass{}
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: praestoStorageClassName}, storageClass); err == nil {
+				_ = k8sClient.Delete(ctx, storageClass)
+			}
+		})
+
+		node := &corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:   nodeName,
+				Labels: map[string]string{"praesto.io/cache-node": "true"},
+			},
+		}
+		Expect(k8sClient.Create(ctx, node)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, node) })
+
+		mc := &praestov1alpha1.ModelCache{
+			ObjectMeta: metav1.ObjectMeta{Name: localModelCacheName, Namespace: namespace},
+			Spec: praestov1alpha1.ModelCacheSpec{
+				Source: praestov1alpha1.Source{Huggingface: praestov1alpha1.HuggingfaceSource{
+					Repo:  "org/model",
+					Token: praestov1alpha1.Token{SecretRef: praestov1alpha1.SecretRef{Name: "hf-secret", Key: "token"}},
+				}},
+				Storage: praestov1alpha1.Storage{
+					StorageClassName: praestoStorageClassName,
+					Size:             "1Gi",
+				},
+				NodeSelector: map[string]string{"praesto.io/cache-node": "true"},
+			},
+		}
+		Expect(k8sClient.Create(ctx, mc)).To(Succeed())
+
+		controllerReconciler := &ModelCacheReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+		_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: localModelCacheKey})
+		Expect(err).NotTo(HaveOccurred())
+
+		modelCacheNodeKey := types.NamespacedName{Name: modelCacheNodeName(mc, nodeName)}
+		createdNode := &praestov1alpha1.ModelCacheNode{}
+		Eventually(func() error {
+			return k8sClient.Get(ctx, modelCacheNodeKey, createdNode)
+		}).Should(Succeed())
+		createdNode.Finalizers = []string{"praesto.io/test-node-finalizer"}
+		Expect(k8sClient.Update(ctx, createdNode)).To(Succeed())
+
+		Expect(k8sClient.Get(ctx, localModelCacheKey, mc)).To(Succeed())
+		Expect(mc.Finalizers).To(ContainElement(modelCacheFinalizer))
+		Expect(k8sClient.Delete(ctx, mc)).To(Succeed())
+
+		_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: localModelCacheKey})
+		Expect(err).NotTo(HaveOccurred())
+
+		terminatingNode := &praestov1alpha1.ModelCacheNode{}
+		Expect(k8sClient.Get(ctx, modelCacheNodeKey, terminatingNode)).To(Succeed())
+		Expect(terminatingNode.DeletionTimestamp.IsZero()).To(BeFalse())
+
+		terminatingModelCache := &praestov1alpha1.ModelCache{}
+		Expect(k8sClient.Get(ctx, localModelCacheKey, terminatingModelCache)).To(Succeed())
+		Expect(terminatingModelCache.Finalizers).To(ContainElement(modelCacheFinalizer))
+
+		terminatingNode.Finalizers = nil
+		Expect(k8sClient.Update(ctx, terminatingNode)).To(Succeed())
+		Eventually(func() bool {
+			err := k8sClient.Get(ctx, modelCacheNodeKey, &praestov1alpha1.ModelCacheNode{})
+			return errors.IsNotFound(err)
+		}).Should(BeTrue())
+
+		_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: localModelCacheKey})
+		Expect(err).NotTo(HaveOccurred())
+		Eventually(func() bool {
+			err := k8sClient.Get(ctx, localModelCacheKey, &praestov1alpha1.ModelCache{})
+			return errors.IsNotFound(err)
+		}).Should(BeTrue())
+	})
 })
 
 func validPVCSpec() corev1.PersistentVolumeClaimSpec {
