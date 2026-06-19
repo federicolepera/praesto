@@ -84,3 +84,35 @@ downloader:
   image:
     repository: ghcr.io/federicolepera/praesto/downloader
     tag: "0.1.0"
+
+csi:
+  enabled: true
+  driverName: csi.praesto.io
+  kubeletRootDir: /var/lib/kubelet
+  cacheRoot: /var/praesto
+  image:
+    repository: ghcr.io/federicolepera/praesto/csi-node-driver
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+  registrar:
+    image:
+      repository: registry.k8s.io/sig-storage/csi-node-driver-registrar
+      tag: v2.13.0
+      pullPolicy: IfNotPresent
+    resources: {}
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+  podAnnotations: {}
+  podLabels: {}
+  priorityClassName: ""
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  updateStrategy:
+    type: RollingUpdate
+  resources: {}
+  securityContext:
+    privileged: true
+    allowPrivilegeEscalation: true

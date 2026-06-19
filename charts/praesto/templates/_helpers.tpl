@@ -76,3 +76,25 @@ control-plane: controller-manager
 {{- define "praesto.webhookCABundleAnnotation" -}}
 {{ include "praesto.namespace" . }}/{{ include "praesto.certificateName" . }}
 {{- end -}}
+
+{{- define "praesto.csiDriverName" -}}
+{{- default "csi.praesto.io" .Values.csi.driverName -}}
+{{- end -}}
+
+{{- define "praesto.csiNodeName" -}}
+{{- printf "%s-csi-node" (include "praesto.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "praesto.csiServiceAccountName" -}}
+{{- if .Values.csi.serviceAccount.create -}}
+{{- default (include "praesto.csiNodeName" .) .Values.csi.serviceAccount.name -}}
+{{- else -}}
+{{- default "default" .Values.csi.serviceAccount.name -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "praesto.csiSelectorLabels" -}}
+app.kubernetes.io/name: {{ include "praesto.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: csi-node
+{{- end -}}

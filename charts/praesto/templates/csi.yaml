@@ -1,0 +1,142 @@
+{{- if .Values.csi.enabled }}
+{{- if .Values.csi.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "praesto.csiServiceAccountName" . }}
+  namespace: {{ include "praesto.namespace" . }}
+  labels:
+    {{- include "praesto.labels" . | nindent 4 }}
+    app.kubernetes.io/component: csi-node
+  {{- with .Values.csi.serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+---
+{{- end }}
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: {{ include "praesto.csiDriverName" . }}
+  labels:
+    {{- include "praesto.labels" . | nindent 4 }}
+    app.kubernetes.io/component: csi-node
+spec:
+  attachRequired: false
+  podInfoOnMount: false
+  volumeLifecycleModes:
+    - Ephemeral
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "praesto.csiNodeName" . }}
+  namespace: {{ include "praesto.namespace" . }}
+  labels:
+    {{- include "praesto.labels" . | nindent 4 }}
+    app.kubernetes.io/component: csi-node
+spec:
+  selector:
+    matchLabels:
+      {{- include "praesto.csiSelectorLabels" . | nindent 6 }}
+  {{- with .Values.csi.updateStrategy }}
+  updateStrategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  template:
+    metadata:
+      {{- with .Values.csi.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "praesto.csiSelectorLabels" . | nindent 8 }}
+        {{- with .Values.csi.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "praesto.csiServiceAccountName" . }}
+      {{- if .Values.csi.priorityClassName }}
+      priorityClassName: {{ .Values.csi.priorityClassName }}
+      {{- end }}
+      tolerations:
+        - operator: Exists
+        {{- with .Values.csi.tolerations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.csi.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.csi.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: csi-node-driver
+          image: "{{ .Values.csi.image.repository }}:{{ .Values.csi.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.csi.image.pullPolicy }}
+          args:
+            - --driver-name={{ include "praesto.csiDriverName" . }}
+            - --endpoint=unix:///csi/csi.sock
+            - --node-name=$(NODE_NAME)
+            - --cache-root={{ .Values.csi.cacheRoot }}
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          {{- with .Values.csi.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.csi.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /csi
+            - name: kubelet-dir
+              mountPath: {{ .Values.csi.kubeletRootDir }}
+              mountPropagation: Bidirectional
+            - name: praesto-cache
+              mountPath: {{ .Values.csi.cacheRoot }}
+              mountPropagation: HostToContainer
+        - name: node-driver-registrar
+          image: "{{ .Values.csi.registrar.image.repository }}:{{ .Values.csi.registrar.image.tag }}"
+          imagePullPolicy: {{ .Values.csi.registrar.image.pullPolicy }}
+          args:
+            - --csi-address=/csi/csi.sock
+            - --kubelet-registration-path={{ .Values.csi.kubeletRootDir }}/plugins/{{ include "praesto.csiDriverName" . }}/csi.sock
+          {{- with .Values.csi.registrar.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /csi
+            - name: registration-dir
+              mountPath: /registration
+      volumes:
+        - name: plugin-dir
+          hostPath:
+            path: {{ .Values.csi.kubeletRootDir }}/plugins/{{ include "praesto.csiDriverName" . }}
+            type: DirectoryOrCreate
+        - name: registration-dir
+          hostPath:
+            path: {{ .Values.csi.kubeletRootDir }}/plugins_registry
+            type: DirectoryOrCreate
+        - name: kubelet-dir
+          hostPath:
+            path: {{ .Values.csi.kubeletRootDir }}
+            type: Directory
+        - name: praesto-cache
+          hostPath:
+            path: {{ .Values.csi.cacheRoot }}
+            type: DirectoryOrCreate
+{{- end }}
