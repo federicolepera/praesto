@@ -17,10 +17,12 @@ COPY . .
 # Build the CSI node driver for the target platform.
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -o csi-node-driver ./cmd/csi-node-driver
 
-# Use distroless as minimal base image to package the CSI node driver binary.
-# The CSI node plugin is expected to run privileged as root so it can create its
-# kubelet plugin socket and perform mount operations.
-FROM gcr.io/distroless/static
+# The CSI node plugin uses k8s.io/mount-utils, which shells out to the system
+# `mount`/`umount` binaries. Keep a small runtime image that includes util-linux.
+FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends util-linux \
+    && rm -rf /var/lib/apt/lists/*
 WORKDIR /
 COPY --from=builder /workspace/csi-node-driver .
 
