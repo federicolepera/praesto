@@ -12,7 +12,7 @@
 <div align="center">
 
 <p align="center">
-  Kubernetes-native model cache operator for preparing AI model artifacts once, storing them in shared volumes, and mounting them into workloads through simple Pod annotations.
+  Kubernetes-native model cache operator and CSI node driver for preparing AI model artifacts once per node and mounting them into workloads through simple Pod annotations.
 </p>
 
 <div align="center">
@@ -43,6 +43,7 @@
 ## Table of Contents
 - [What is Praesto?](#what-is-praesto)
 - [How it Works](#how-it-works)
+- [Storage modes](#storage-modes)
 - [Quickstart](#quickstart)
   - [Prerequisites](#prerequisites)
   - [Helm](#helm)
@@ -61,49 +62,108 @@
 - [Local Webhook Debugging](#local-webhook-debugging)
 - [Requirements](#requirements)
 - [Current Limitations](#current-limitations)
+- [Roadmap](#roadmap)
 - [Contributing](#contributing)
 - [License](#license)
 
 ## What is Praesto?
 
-**Praesto** is a Kubernetes operator that makes AI model artifacts reusable across workloads.
+**Praesto** is a Kubernetes operator and CSI node driver that makes AI model artifacts reusable across workloads.
 
-Instead of downloading the same model inside every Pod, Praesto lets you define a `ModelCache` custom resource. The operator creates storage, runs a downloader Job, tracks readiness, and then injects the resulting volume into annotated Pods.
+Instead of downloading the same model inside every Pod, Praesto lets you define a `ModelCache` custom resource. The operator prepares the model once per selected node, tracks readiness through `ModelCacheNode` resources, and the Praesto CSI driver mounts the local cache into workloads.
 
-Praesto is currently focused on a small, practical v0.1.0 workflow:
+The core workflow is the local CSI mode:
 
 - **ModelCache CRD**: declare which model should be cached.
-- **Shared PVC**: store model files in a ReadWriteMany volume.
-- **Downloader Job**: prepare HuggingFace model files into the PVC.
-- **Status conditions**: expose lifecycle state through Kubernetes-native status.
-- **Pod injection**: mount ready caches into workloads using annotations.
-- **Helm and Kustomize installs**: deploy the operator, RBAC, CRDs, services, and webhooks.
+- **ModelCacheNode CRD**: represent the model cache state on each Kubernetes node.
+- **Local node cache**: store model files under `/var/praesto/<namespace>/<modelcache>`.
+- **Downloader Job per node**: download HuggingFace artifacts into the local cache.
+- **CSI node driver**: mount the local cache into user Pods with a CSI inline volume.
+- **Mutating webhook**: inject the CSI volume into annotated Pods.
+
+Praesto also keeps a legacy RWX PVC mode for clusters that already provide a shared `ReadWriteMany` StorageClass.
 
 ## How it Works
 
 ```text
 ModelCache
   ↓
-ReadWriteMany PVC
+ModelCacheNode per selected node
   ↓
-Downloader Job
+Local PV/PVC + downloader Job on each node
   ↓
-Ready status
+Model files in /var/praesto/<namespace>/<modelcache>
   ↓
-Annotated Pod
+Praesto CSI node driver
   ↓
-Read-only model mount
+Annotated Pod with read-only model mount
 ```
 
-Praesto reconciles each `ModelCache` by creating a PVC named `praesto-<modelcache-name>` and a downloader Job named `praesto-download-<modelcache-name>`. Once the Job completes, workloads can request the cache with Pod annotations.
+In local CSI mode, Praesto reconciles each `ModelCache` by creating one cluster-scoped `ModelCacheNode` per target node. Each `ModelCacheNode` owns the node-local storage preparation and downloader Job. Once the node cache is ready, workloads can request the cache with Pod annotations and the mutating webhook injects a CSI volume using the `csi.praesto.io` driver.
+
+## Storage modes
+
+Praesto currently supports two storage modes. The mode is selected by `ModelCache.spec.storage.storageClassName`.
+
+### Local CSI mode: `storageClassName` empty
+
+This is the primary Praesto direction.
+
+```yaml
+spec:
+  storage:
+    size: 10Gi
+```
+
+When `storageClassName` is empty or omitted, Praesto:
+
+1. creates `ModelCacheNode` resources for matching nodes;
+2. prepares local node storage under `/var/praesto/<namespace>/<modelcache>`;
+3. runs downloader Jobs on those nodes;
+4. exposes the ready cache through the Praesto CSI node driver;
+5. injects a CSI volume into annotated Pods.
+
+Injected Pod volume:
+
+```yaml
+volumes:
+  - name: praesto-model-cache
+    csi:
+      driver: csi.praesto.io
+      readOnly: true
+      volumeAttributes:
+        modelCacheNamespace: default
+        modelCacheName: tinyllama-test
+```
+
+This avoids requiring user workloads to mount internal Praesto PVCs directly.
+
+### Legacy RWX PVC mode: `storageClassName` set
+
+```yaml
+spec:
+  storage:
+    storageClassName: standard
+    size: 10Gi
+```
+
+When `storageClassName` is set, Praesto uses the older shared-volume workflow:
+
+1. creates a namespaced PVC;
+2. runs one downloader Job into that PVC;
+3. injects the PVC read-only into annotated Pods.
+
+This mode requires a StorageClass that supports `ReadWriteMany` if multiple Pods or nodes need to consume the cache.
 
 ## Quickstart
 
-The quickstart validates the full flow:
+The quickstart validates the legacy RWX PVC flow:
 
 ```text
 ModelCache → PVC → downloader Job → Ready status → annotated Deployment → mounted model files
 ```
+
+For the local CSI flow, use the samples in `config/samples/presto.csi/`.
 
 ### Prerequisites
 
@@ -113,9 +173,9 @@ You need:
 - `kubectl`
 - `helm` if installing via the Helm chart
 - cert-manager installed in the cluster
-- a StorageClass that supports `ReadWriteMany`
+- the Praesto CSI node driver enabled for local CSI mode, or a StorageClass that supports `ReadWriteMany` for legacy PVC mode
 
-The sample uses:
+The quickstart sample uses the legacy PVC mode:
 
 ```yaml
 storageClassName: standard
@@ -290,7 +350,7 @@ kubectl delete -f config/samples/quickstart/00-modelcache-tinyllama.yaml
 
 ## ModelCache Resources
 
-A `ModelCache` describes a model that should be downloaded and made available to workloads through a Kubernetes volume.
+A `ModelCache` describes a model that should be downloaded and made available to workloads through either the Praesto CSI driver or a legacy PVC volume.
 
 ```yaml
 apiVersion: praesto.praesto.io/v1alpha1
@@ -304,18 +364,24 @@ spec:
       repo: TinyLlama/TinyLlama-1.1B-Chat-v1.0
       revision: main
   storage:
-    storageClassName: standard
     size: 10Gi
 ```
 
-Praesto creates:
+With `storageClassName` omitted, Praesto uses local CSI mode and creates:
+
+- one `ModelCacheNode` per selected node
+- a local PV/PVC pair for each node cache
+- a downloader Job per node
+- a CSI mount surface for workloads
+
+Each `ModelCacheNode` tracks node-local readiness and points to the local path used by the CSI driver.
+
+With `storageClassName` set, Praesto uses legacy PVC mode and creates:
 
 - a PVC named `praesto-<modelcache-name>`
 - a downloader Job named `praesto-download-<modelcache-name>`
 
-The downloader Job starts only after the PVC is bound.
-
-Praesto verifies that `spec.storage.storageClassName` exists before creating the PVC. If the StorageClass is missing, the `ModelCache` moves to `Failed` with a `PVCReady=False` condition reason `StorageClassNotFound`.
+In legacy PVC mode, Praesto verifies that `spec.storage.storageClassName` exists before creating the PVC. If the StorageClass is missing, the `ModelCache` moves to `Failed` with a `PVCReady=False` condition reason `StorageClassNotFound`.
 
 Kubernetes does not expose a generic way to know whether a StorageClass supports `ReadWriteMany`, so PVCs that remain pending include a status message that points users to verify RWX support for the configured StorageClass.
 
@@ -326,8 +392,13 @@ Praesto updates the `ModelCache` status with:
 | Field | Description |
 |-------|-------------|
 | `status.phase` | Current lifecycle phase |
-| `status.pvcName` | Name of the generated PVC |
-| `status.downloadJobName` | Name of the generated downloader Job |
+| `status.pvcName` | Name of the generated PVC in legacy PVC mode |
+| `status.downloadJobName` | Name of the generated downloader Job in legacy PVC mode |
+| `status.totalNodes` | Number of `ModelCacheNode` resources for local CSI mode |
+| `status.readyNodes` | Number of nodes where the cache is ready |
+| `status.downloadingNodes` | Number of nodes currently downloading |
+| `status.pendingNodes` | Number of nodes pending storage/download preparation |
+| `status.failedNodes` | Number of nodes where cache preparation failed |
 | `status.conditions` | Kubernetes-style readiness conditions |
 
 Supported phases:
@@ -336,14 +407,14 @@ Supported phases:
 |-------|-------------|
 | `Pending` | PVC or download preparation is still pending |
 | `Downloading` | Downloader Job is running |
-| `Ready` | Model files are available in the PVC |
+| `Ready` | Model files are available to workloads |
 | `Failed` | PVC or downloader Job failed |
 
 Current conditions:
 
 | Condition | Description |
 |-----------|-------------|
-| `PVCReady` | The model PVC is bound and usable |
+| `PVCReady` | The model storage is bound and usable |
 | `DownloadComplete` | The downloader Job completed successfully |
 | `Ready` | The model cache is ready to be mounted by workloads |
 
@@ -394,7 +465,7 @@ The webhook uses `failurePolicy: Fail` inside opt-in namespaces. If Praesto is u
 
 The validating webhook checks `ModelCache` input errors on create and update:
 
-- `spec.storage.storageClassName` is required
+- `spec.storage.storageClassName`, when set, must reference an existing StorageClass
 - `spec.storage.size` is required
 - `spec.storage.size` must be a valid Kubernetes quantity greater than zero
 - `spec.source.huggingface.repo` is required
@@ -415,6 +486,11 @@ Common chart values:
 | `image.tag` | Operator image tag | Chart app version |
 | `downloader.image.repository` | Default downloader image repository | `ghcr.io/federicolepera/praesto/downloader` |
 | `downloader.image.tag` | Default downloader image tag | Chart app version |
+| `csi.enabled` | Install the Praesto CSI node driver | `true` |
+| `csi.driverName` | CSI driver name used by injected volumes | `csi.praesto.io` |
+| `csi.cacheRoot` | Host path where node-local model caches live | `/var/praesto` |
+| `csi.image.repository` | CSI node driver image repository | `ghcr.io/federicolepera/praesto/csi-node-driver` |
+| `csi.image.tag` | CSI node driver image tag | `0.1.0` |
 | `webhooks.enabled` | Install admission webhooks | `true` |
 | `certManager.enabled` | Create cert-manager issuer/certificate resources | `true` |
 | `metrics.enabled` | Expose metrics service and RBAC | `true` |
@@ -602,14 +678,15 @@ make mutatingwebhook-delete
 |-------------|-------|
 | Kubernetes | CRDs, Jobs, PVCs, and admission webhooks |
 | cert-manager | Required by the default Helm/Kustomize webhook installation |
-| ReadWriteMany-capable StorageClass | Required for sharing model caches across workloads |
+| Praesto CSI node driver | Required for local per-node CSI cache mounts |
+| ReadWriteMany-capable StorageClass | Required only for the legacy PVC workflow |
 | kubectl | Required for local install and debug workflows |
 | helm | Required for Helm chart installation |
 | OpenSSL | Required for local webhook certificate generation |
 
 ## Current Limitations
 
-- Praesto is early-stage and focused on the v0.1.0 workflow.
+- Praesto is early-stage; local CSI mode is the primary direction while the legacy RWX PVC flow remains supported.
 - The downloader flow is intentionally simple and may change.
 - `ModelCache.spec` is immutable after creation. To change source, storage, or downloader settings, delete and recreate the `ModelCache`.
 - Multi-container Pods should set `praesto.io/target-container`; otherwise the mutating webhook mounts the cache into the first container.
@@ -617,6 +694,16 @@ make mutatingwebhook-delete
 - The mutating webhook only runs in namespaces labeled `praesto.io/model-cache-injection=enabled`.
 - Scheduling-aware injection is still on the roadmap. For CSI/local caches, workloads must currently be scheduled on nodes where the requested `ModelCacheNode` is ready.
 - For the legacy PVC flow, storage must be provided by a user-managed RWX-capable StorageClass. Praesto validates StorageClass existence, but RWX support is diagnosed from PVC pending status because it is provisioner-specific.
+
+## Roadmap
+
+Praesto's storage roadmap is centered on the CSI driver.
+
+- **Scheduling-aware injection**: the mutating webhook should inspect ready `ModelCacheNode` resources and add compatible scheduling constraints so Pods land on nodes that already have the requested cache.
+- **CSI StorageClass support**: the CSI driver should become usable through a Praesto StorageClass, not only inline CSI volumes. The goal is to let users request model-backed volumes with PVCs while Praesto handles local cache placement.
+- **RWX-like model distribution without external RWX storage**: the long-term goal is to provide the practical experience people want from RWX model volumes without requiring a user-managed RWX StorageClass. Praesto would distribute/cache models per node and expose them through CSI.
+- **Node agent integration**: node-local directory creation, permissions, cleanup, disk checks, and cache health should move into a dedicated node agent.
+- **Cache lifecycle policies**: configurable retention, eviction, refresh, and cleanup for node-local model data.
 
 ## Contributing
 
