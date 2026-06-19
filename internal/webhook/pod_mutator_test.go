@@ -68,8 +68,8 @@ func TestPodMutatorHandle(t *testing.T) {
 		assertRejected(t, resp, "is not ready")
 	})
 
-	t.Run("rejects ready model cache without PVC", func(t *testing.T) {
-		mutator := newTestPodMutator(t, scheme, modelCacheWithStatus(praestov1alpha1.ModelCachePhaseReady, ""))
+	t.Run("rejects legacy ready model cache without PVC", func(t *testing.T) {
+		mutator := newTestPodMutator(t, scheme, legacyModelCacheWithStatus(praestov1alpha1.ModelCachePhaseReady, ""))
 		pod := annotatedPod(podWithContainers("app"))
 
 		resp, _ := handlePod(t, mutator, pod)
@@ -86,14 +86,25 @@ func TestPodMutatorHandle(t *testing.T) {
 		assertRejected(t, resp, "pod has no containers")
 	})
 
-	t.Run("mounts ready model cache into a single container", func(t *testing.T) {
+	t.Run("mounts local ready model cache as a CSI volume into a single container", func(t *testing.T) {
 		mutator := newTestPodMutator(t, scheme, readyModelCache())
 		pod := annotatedPod(podWithContainers("app"))
 
 		resp, mutatedPod := handlePod(t, mutator, pod)
 
 		assertAllowed(t, resp)
-		assertModelVolume(t, mutatedPod, "praesto-tinyllama")
+		assertModelCSIVolume(t, mutatedPod, "default", "tinyllama-test")
+		assertAppContainerMount(t, mutatedPod, DefaultModelMountPath)
+	})
+
+	t.Run("mounts legacy ready model cache as a PVC volume", func(t *testing.T) {
+		mutator := newTestPodMutator(t, scheme, legacyReadyModelCache())
+		pod := annotatedPod(podWithContainers("app"))
+
+		resp, mutatedPod := handlePod(t, mutator, pod)
+
+		assertAllowed(t, resp)
+		assertModelPVCVolume(t, mutatedPod, "praesto-tinyllama")
 		assertAppContainerMount(t, mutatedPod, DefaultModelMountPath)
 	})
 
@@ -154,7 +165,7 @@ func TestPodMutatorHandle(t *testing.T) {
 	t.Run("does not duplicate existing identical volume and mount", func(t *testing.T) {
 		mutator := newTestPodMutator(t, scheme, readyModelCache())
 		pod := annotatedPod(podWithContainers("app"))
-		pod.Spec.Volumes = []corev1.Volume{modelCacheVolume("praesto-tinyllama", true)}
+		pod.Spec.Volumes = []corev1.Volume{modelCacheCSIVolume("default", "tinyllama-test")}
 		pod.Spec.Containers[0].VolumeMounts = []corev1.VolumeMount{modelCacheMount(DefaultModelMountPath, true)}
 
 		resp, mutatedPod := handlePod(t, mutator, pod)
@@ -255,7 +266,11 @@ func handlePod(t *testing.T, mutator *PodMutator, pod *corev1.Pod) (admission.Re
 }
 
 func readyModelCache() *praestov1alpha1.ModelCache {
-	return modelCacheWithStatus(praestov1alpha1.ModelCachePhaseReady, "praesto-tinyllama")
+	return modelCacheWithStatus(praestov1alpha1.ModelCachePhaseReady, "")
+}
+
+func legacyReadyModelCache() *praestov1alpha1.ModelCache {
+	return legacyModelCacheWithStatus(praestov1alpha1.ModelCachePhaseReady, "praesto-tinyllama")
 }
 
 func modelCacheWithStatus(phase, pvcName string) *praestov1alpha1.ModelCache {
@@ -269,6 +284,12 @@ func modelCacheWithStatus(phase, pvcName string) *praestov1alpha1.ModelCache {
 			PvcName: pvcName,
 		},
 	}
+}
+
+func legacyModelCacheWithStatus(phase, pvcName string) *praestov1alpha1.ModelCache {
+	modelCache := modelCacheWithStatus(phase, pvcName)
+	modelCache.Spec.Storage.StorageClassName = "standard"
+	return modelCache
 }
 
 func podWithContainers(containerNames ...string) *corev1.Pod {
@@ -305,6 +326,22 @@ func modelCacheVolume(pvcName string, readOnly bool) corev1.Volume {
 	}
 }
 
+func modelCacheCSIVolume(namespace, name string) corev1.Volume {
+	return corev1.Volume{
+		Name: testModelCacheVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			CSI: &corev1.CSIVolumeSource{
+				Driver:   PraestoCSIDriverName,
+				ReadOnly: boolPtr(true),
+				VolumeAttributes: map[string]string{
+					CSIVolumeAttributeModelNamespace: namespace,
+					CSIVolumeAttributeModelCacheName: name,
+				},
+			},
+		},
+	}
+}
+
 func modelCacheMount(mountPath string, readOnly bool) corev1.VolumeMount {
 	return corev1.VolumeMount{
 		Name:      testModelCacheVolumeName,
@@ -330,7 +367,7 @@ func assertRejected(t *testing.T, resp admission.Response, expectedMessage strin
 	}
 }
 
-func assertModelVolume(t *testing.T, pod *corev1.Pod, pvcName string) {
+func assertModelPVCVolume(t *testing.T, pod *corev1.Pod, pvcName string) {
 	t.Helper()
 	for _, volume := range pod.Spec.Volumes {
 		if volume.Name != testModelCacheVolumeName {
@@ -345,6 +382,26 @@ func assertModelVolume(t *testing.T, pod *corev1.Pod, pvcName string) {
 		return
 	}
 	t.Fatalf("expected model cache volume")
+}
+
+func assertModelCSIVolume(t *testing.T, pod *corev1.Pod, namespace, name string) {
+	t.Helper()
+	for _, volume := range pod.Spec.Volumes {
+		if volume.Name != testModelCacheVolumeName {
+			continue
+		}
+		if volume.CSI == nil {
+			t.Fatalf("expected model volume to use CSI")
+		}
+		if volume.CSI.Driver != PraestoCSIDriverName || volume.CSI.ReadOnly == nil || !*volume.CSI.ReadOnly {
+			t.Fatalf("unexpected model volume CSI config: %#v", volume.CSI)
+		}
+		if volume.CSI.VolumeAttributes[CSIVolumeAttributeModelNamespace] != namespace || volume.CSI.VolumeAttributes[CSIVolumeAttributeModelCacheName] != name {
+			t.Fatalf("unexpected model volume CSI attributes: %#v", volume.CSI.VolumeAttributes)
+		}
+		return
+	}
+	t.Fatalf("expected model cache CSI volume")
 }
 
 func assertAppContainerMount(t *testing.T, pod *corev1.Pod, mountPath string) {

@@ -17,6 +17,11 @@ const (
 	ModelPathAnnotationKey = "praesto.io/model-mount-path"
 	ModelContainerNameKey  = "praesto.io/target-container"
 	DefaultModelMountPath  = "/models"
+
+	ModelCacheVolumeName             = "praesto-model-cache"
+	PraestoCSIDriverName             = "csi.praesto.io"
+	CSIVolumeAttributeModelNamespace = "modelCacheNamespace"
+	CSIVolumeAttributeModelCacheName = "modelCacheName"
 )
 
 type PodMutator struct {
@@ -58,14 +63,7 @@ func (m *PodMutator) Handle(ctx context.Context, req admission.Request) admissio
 	if modelCache.Status.Phase != praestov1alpha1.ModelCachePhaseReady {
 		return admission.Errored(400, fmt.Errorf("model cache %s is not ready", modelCacheName))
 	}
-	pvcName := modelCache.Status.PvcName
-	if pvcName == "" {
-		return admission.Errored(400, fmt.Errorf("model cache %s does not have a PVC associated yet", modelCacheName))
-	}
-
-	volumeName := "praesto-model-cache"
-
-	if err := ensureModelCacheVolume(pod, volumeName, pvcName); err != nil {
+	if err := ensureModelCacheVolume(pod, modelCache); err != nil {
 		return admission.Errored(400, err)
 	}
 
@@ -78,7 +76,7 @@ func (m *PodMutator) Handle(ctx context.Context, req admission.Request) admissio
 		found := false
 		for i, container := range pod.Spec.Containers {
 			if container.Name == targetContainerName {
-				if err := ensureModelCacheVolumeMount(&pod.Spec.Containers[i], volumeName, modelMountPath); err != nil {
+				if err := ensureModelCacheVolumeMount(&pod.Spec.Containers[i], ModelCacheVolumeName, modelMountPath); err != nil {
 					return admission.Errored(400, err)
 				}
 				found = true
@@ -89,7 +87,7 @@ func (m *PodMutator) Handle(ctx context.Context, req admission.Request) admissio
 			return admission.Errored(400, fmt.Errorf("target container %s not found in pod", targetContainerName))
 		}
 	} else {
-		if err := ensureModelCacheVolumeMount(&pod.Spec.Containers[0], volumeName, modelMountPath); err != nil {
+		if err := ensureModelCacheVolumeMount(&pod.Spec.Containers[0], ModelCacheVolumeName, modelMountPath); err != nil {
 			return admission.Errored(400, err)
 		}
 	}
@@ -101,21 +99,67 @@ func (m *PodMutator) Handle(ctx context.Context, req admission.Request) admissio
 	return admission.PatchResponseFromRaw(req.Object.Raw, marshaledPod)
 }
 
-func ensureModelCacheVolume(pod *corev1.Pod, volumeName, pvcName string) error {
+func ensureModelCacheVolume(pod *corev1.Pod, modelCache *praestov1alpha1.ModelCache) error {
+	if usesCSIVolume(modelCache) {
+		return ensureModelCacheCSIVolume(pod, modelCache)
+	}
+
+	return ensureModelCachePVCVolume(pod, modelCache)
+}
+
+func usesCSIVolume(modelCache *praestov1alpha1.ModelCache) bool {
+	return modelCache.Spec.Storage.StorageClassName == ""
+}
+
+func ensureModelCacheCSIVolume(pod *corev1.Pod, modelCache *praestov1alpha1.ModelCache) error {
 	for _, volume := range pod.Spec.Volumes {
-		if volume.Name != volumeName {
+		if volume.Name != ModelCacheVolumeName {
 			continue
 		}
 
-		pvc := volume.PersistentVolumeClaim
-		if pvc == nil || pvc.ClaimName != pvcName || !pvc.ReadOnly {
-			return fmt.Errorf("volume %s already exists with a conflicting configuration", volumeName)
+		csi := volume.CSI
+		if csi == nil || csi.Driver != PraestoCSIDriverName || csi.ReadOnly == nil || !*csi.ReadOnly || csi.VolumeAttributes[CSIVolumeAttributeModelNamespace] != modelCache.Namespace || csi.VolumeAttributes[CSIVolumeAttributeModelCacheName] != modelCache.Name {
+			return fmt.Errorf("volume %s already exists with a conflicting configuration", ModelCacheVolumeName)
 		}
 		return nil
 	}
 
 	pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
-		Name: volumeName,
+		Name: ModelCacheVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			CSI: &corev1.CSIVolumeSource{
+				Driver:   PraestoCSIDriverName,
+				ReadOnly: boolPtr(true),
+				VolumeAttributes: map[string]string{
+					CSIVolumeAttributeModelNamespace: modelCache.Namespace,
+					CSIVolumeAttributeModelCacheName: modelCache.Name,
+				},
+			},
+		},
+	})
+	return nil
+}
+
+func ensureModelCachePVCVolume(pod *corev1.Pod, modelCache *praestov1alpha1.ModelCache) error {
+	pvcName := modelCache.Status.PvcName
+	if pvcName == "" {
+		return fmt.Errorf("model cache %s does not have a PVC associated yet", modelCache.Name)
+	}
+
+	for _, volume := range pod.Spec.Volumes {
+		if volume.Name != ModelCacheVolumeName {
+			continue
+		}
+
+		pvc := volume.PersistentVolumeClaim
+		if pvc == nil || pvc.ClaimName != pvcName || !pvc.ReadOnly {
+			return fmt.Errorf("volume %s already exists with a conflicting configuration", ModelCacheVolumeName)
+		}
+		return nil
+	}
+
+	pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
+		Name: ModelCacheVolumeName,
 		VolumeSource: corev1.VolumeSource{
 			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 				ClaimName: pvcName,
@@ -124,6 +168,10 @@ func ensureModelCacheVolume(pod *corev1.Pod, volumeName, pvcName string) error {
 		},
 	})
 	return nil
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }
 
 func ensureModelCacheVolumeMount(container *corev1.Container, volumeName, mountPath string) error {
