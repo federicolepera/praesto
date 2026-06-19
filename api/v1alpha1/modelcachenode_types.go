@@ -23,11 +23,16 @@ import (
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
+type StorageNode struct {
+	StorageClassName string `json:"storageClassName"`
+	Size             string `json:"size"`
+}
+
 // ModelCacheNodeSpec defines the desired state of ModelCacheNode
 type ModelCacheNodeSpec struct {
 	ModelCacheRef ModelCacheNodeModelCacheRef `json:"modelCacheRef"`
 	NodeName      string                      `json:"nodeName"`
-	StorageClass  string                      `json:"storageClassName"`
+	Storage       StorageNode                 `json:"storage"`
 }
 
 type ModelCacheNodeModelCacheRef struct {
@@ -54,6 +59,8 @@ type ModelCacheNodeStatus struct {
 	PvcName string `json:"pvcName,omitempty"`
 
 	PvName string `json:"pvName,omitempty"`
+
+	DownloadJobName string `json:"downloadJobName,omitempty"`
 
 	// The status of each condition is one of True, False, or Unknown.
 	// +listType=map

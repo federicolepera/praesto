@@ -188,6 +188,46 @@ func TestDownloadJobForModelCache(t *testing.T) {
 	}
 }
 
+func TestDownloadJobForModelCacheNode(t *testing.T) {
+	modelCache := testModelCache()
+	modelCacheNode := testModelCacheNode(modelCache)
+	pvc := testModelCacheNodePVC(modelCacheNode)
+
+	job, err := DownloadJobForModelCacheNode(modelCache, modelCacheNode, pvc)
+	if err != nil {
+		t.Fatalf("build Job: %v", err)
+	}
+
+	if job.Name != JobNameForModelCacheNode(modelCacheNode.Name) {
+		t.Fatalf("unexpected Job name: %s", job.Name)
+	}
+	if job.Namespace != pvc.Namespace {
+		t.Fatalf("unexpected Job namespace: %s", job.Namespace)
+	}
+	if job.Spec.Template.Spec.NodeName != modelCacheNode.Spec.NodeName {
+		t.Fatalf("expected Job nodeName %s, got %s", modelCacheNode.Spec.NodeName, job.Spec.Template.Spec.NodeName)
+	}
+	assertLabels(t, job.Labels, DownloadJobLabels(modelCacheNode.Name))
+
+	container := job.Spec.Template.Spec.Containers[0]
+	assertEnvValue(t, container.Env, "HF_REPO", modelCache.Spec.Source.Huggingface.Repo)
+	assertEnvValue(t, container.Env, "SOURCE_TYPE", "huggingface")
+	assertEnvValue(t, container.Env, "TARGET_PATH", "/model")
+	assertEnvValue(t, container.Env, "MODELCACHE_NAME", modelCache.Name)
+	assertEnvValue(t, container.Env, "MODELCACHE_NAMESPACE", modelCache.Namespace)
+	assertEnvValue(t, container.Env, "MODELCACHENODE_NAME", modelCacheNode.Name)
+	assertEnvValue(t, container.Env, "NODE_NAME", modelCacheNode.Spec.NodeName)
+	assertEnvValue(t, container.Env, "HF_REVISION", modelCache.Spec.Source.Huggingface.Revision)
+	assertSecretEnv(t, container.Env, "HF_TOKEN", "hf-token", "token")
+
+	if !containsVolumeMount(container.VolumeMounts, "model-storage", "/model") {
+		t.Fatalf("expected model-storage volume mount, got %#v", container.VolumeMounts)
+	}
+	if !containsPVCVolume(job.Spec.Template.Spec.Volumes, "model-storage", pvc.Name) {
+		t.Fatalf("expected model-storage PVC volume, got %#v", job.Spec.Template.Spec.Volumes)
+	}
+}
+
 func TestDownloadJobForModelCacheWithOptionalContainerSecurityContext(t *testing.T) {
 	modelCache := testModelCache()
 	allowPrivilegeEscalation := false
@@ -288,7 +328,7 @@ func TestDownloadJobForModelCacheRejectsInvalidResources(t *testing.T) {
 func TestDownloadJobForModelCacheOmitsOptionalEnv(t *testing.T) {
 	modelCache := testModelCache()
 	modelCache.Spec.Source.Huggingface.Revision = ""
-	modelCache.Spec.Source.Huggingface.Token.SecretRef = praestov1alpha1.SecretRef{}
+	modelCache.Spec.Source.Huggingface.Token = nil
 	job, err := DownloadJobForModelCache(modelCache, testPVC(modelCache))
 	if err != nil {
 		t.Fatalf("build Job: %v", err)
@@ -347,6 +387,32 @@ func TestEnsureDownloadJob(t *testing.T) {
 			t.Fatalf("expected one Job, got %d", len(jobList.Items))
 		}
 	})
+}
+
+func TestEnsureDownloadJobModelCacheNode(t *testing.T) {
+	ctx := context.Background()
+	scheme := newTestScheme(t)
+	modelCache := testModelCache()
+	modelCacheNode := testModelCacheNode(modelCache)
+	pvc := testModelCacheNodePVC(modelCacheNode)
+
+	k8sClient := newTestClient(scheme, modelCache, modelCacheNode, pvc)
+	job, err := EnsureDownloadJobModelCacheNode(ctx, k8sClient, scheme, modelCache, modelCacheNode, pvc)
+	if err != nil {
+		t.Fatalf("ensure ModelCacheNode Job: %v", err)
+	}
+
+	if job.Name != JobNameForModelCacheNode(modelCacheNode.Name) {
+		t.Fatalf("unexpected Job name: %s", job.Name)
+	}
+	assertOwnerReference(t, job.OwnerReferences, "ModelCacheNode", modelCacheNode.Name)
+	storedJob := &batchv1.Job{}
+	if err := k8sClient.Get(ctx, types.NamespacedName{Name: job.Name, Namespace: job.Namespace}, storedJob); err != nil {
+		t.Fatalf("get stored Job: %v", err)
+	}
+	if storedJob.Spec.Template.Spec.NodeName != modelCacheNode.Spec.NodeName {
+		t.Fatalf("expected stored Job nodeName %s, got %s", modelCacheNode.Spec.NodeName, storedJob.Spec.Template.Spec.NodeName)
+	}
 }
 
 func TestIsDownloadJobComplete(t *testing.T) {
@@ -412,7 +478,7 @@ func testModelCache() *praestov1alpha1.ModelCache {
 			Source: praestov1alpha1.Source{Huggingface: praestov1alpha1.HuggingfaceSource{
 				Repo:     "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
 				Revision: "main",
-				Token: praestov1alpha1.Token{SecretRef: praestov1alpha1.SecretRef{
+				Token: &praestov1alpha1.Token{SecretRef: praestov1alpha1.SecretRef{
 					Name: "hf-token",
 					Key:  "token",
 				}},
@@ -438,6 +504,37 @@ func testPVC(modelCache *praestov1alpha1.ModelCache) *corev1.PersistentVolumeCla
 			StorageClassName: &storageClassName,
 			Resources: corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{
 				corev1.ResourceStorage: resource.MustParse(modelCache.Spec.Storage.Size),
+			}},
+		},
+	}
+}
+
+func testModelCacheNode(modelCache *praestov1alpha1.ModelCache) *praestov1alpha1.ModelCacheNode {
+	return &praestov1alpha1.ModelCacheNode{
+		TypeMeta:   metav1.TypeMeta{APIVersion: praestov1alpha1.GroupVersion.String(), Kind: "ModelCacheNode"},
+		ObjectMeta: metav1.ObjectMeta{Name: "default-tinyllama-test-worker-1", UID: "modelcachenode-uid"},
+		Spec: praestov1alpha1.ModelCacheNodeSpec{
+			ModelCacheRef: praestov1alpha1.ModelCacheNodeModelCacheRef{Namespace: modelCache.Namespace, Name: modelCache.Name, UID: string(modelCache.UID)},
+			NodeName:      "worker-1",
+			Storage:       praestov1alpha1.StorageNode{Size: modelCache.Spec.Storage.Size},
+		},
+	}
+}
+
+func testModelCacheNodePVC(modelCacheNode *praestov1alpha1.ModelCacheNode) *corev1.PersistentVolumeClaim {
+	storageClassName := modelCacheNode.Spec.Storage.StorageClassName
+	return &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      PVNameForModelCacheNode(modelCacheNode.Spec.NodeName, modelCacheNode.Name),
+			Namespace: "praesto-system",
+			Labels:    ModelCacheLabels(modelCacheNode.Name),
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			StorageClassName: &storageClassName,
+			VolumeName:       PVNameForModelCacheNode(modelCacheNode.Spec.NodeName, modelCacheNode.Name),
+			Resources: corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{
+				corev1.ResourceStorage: resource.MustParse(modelCacheNode.Spec.Storage.Size),
 			}},
 		},
 	}

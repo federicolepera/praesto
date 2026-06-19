@@ -90,14 +90,15 @@ func (r *ModelCacheReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	if !controllerutil.ContainsFinalizer(&modelCache, modelCacheFinalizer) {
+		patch := client.MergeFrom(modelCache.DeepCopy())
 		controllerutil.AddFinalizer(&modelCache, modelCacheFinalizer)
-		if err := r.Update(ctx, &modelCache); err != nil {
+		if err := r.Patch(ctx, &modelCache, patch); err != nil {
 			logger.Error(err, "unable to add ModelCache finalizer")
 			return ctrl.Result{}, err
 		}
 	}
 
-	if modelCache.Status.Phase == praestov1alpha1.ModelCachePhaseReady {
+	if modelCache.Status.Phase == praestov1alpha1.ModelCachePhaseReady && !isLocalModelCache(&modelCache) {
 		pvc, err := downloader.GetManagedModelCachePVC(ctx, r.readyPVCReader(), &modelCache)
 		if err != nil {
 			logger.Error(err, "unable to get PVC for ready ModelCache")
@@ -160,16 +161,16 @@ func (r *ModelCacheReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, nil
 	}
 
-	if modelCache.Spec.Storage.StorageClassName == "praesto.storage.csi.io" {
-		logger.Info("ModelCache is using praesto.storage.csi.io StorageClass", "name", modelCache.Name)
+	if isLocalModelCache(&modelCache) {
+		logger.Info("ModelCache is using local ModelCacheNode storage", "name", modelCache.Name)
 		nodes := &corev1.NodeList{}
 		labelSelector := modelCache.Spec.NodeSelector
 		if err := r.List(ctx, nodes, client.MatchingLabels(labelSelector)); err != nil {
-			logger.Error(err, "unable to list Nodes for ModelCache with praesto.storage.csi.io StorageClass")
+			logger.Error(err, "unable to list Nodes for local ModelCache")
 			return ctrl.Result{}, err
 		}
 		if len(nodes.Items) == 0 {
-			logger.Info("No Nodes found matching nodeSelector for ModelCache with praesto.storage.csi.io StorageClass", "nodeSelector", labelSelector)
+			logger.Info("No Nodes found matching nodeSelector for local ModelCache", "nodeSelector", labelSelector)
 			modelCache.Status.Phase = praestov1alpha1.ModelCachePhaseFailed
 			modelCache.Status.PvcName = ""
 			modelCache.Status.DownloadJobName = ""
@@ -177,12 +178,12 @@ func (r *ModelCacheReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			status.SetCondition(&modelCache, status.ConditionDownloadComplete, metav1.ConditionFalse, "DownloadPending", "Download job has not started because no suitable nodes were found")
 			status.SetCondition(&modelCache, status.ConditionReady, metav1.ConditionFalse, "NoNodesAvailable", "Model is not ready because no suitable nodes were found")
 			if err := status.Update(ctx, r.Client, &modelCache); err != nil {
-				logger.Error(err, "unable to update ModelCache status after no Nodes found for praesto.storage.csi.io StorageClass")
+				logger.Error(err, "unable to update ModelCache status after no Nodes found for local storage")
 				return ctrl.Result{}, err
 			}
 			return ctrl.Result{}, nil
 		}
-		logger.Info("Found Nodes matching nodeSelector for ModelCache with praesto.storage.csi.io StorageClass", "nodeSelector", labelSelector, "nodes", len(nodes.Items))
+		logger.Info("Found Nodes matching nodeSelector for local ModelCache", "nodeSelector", labelSelector, "nodes", len(nodes.Items))
 
 		modelCacheNodes := make([]praestov1alpha1.ModelCacheNode, 0, len(nodes.Items))
 		for _, node := range nodes.Items {
@@ -280,6 +281,10 @@ func (r *ModelCacheReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 }
 
+func isLocalModelCache(modelCache *praestov1alpha1.ModelCache) bool {
+	return modelCache.Spec.Storage.StorageClassName == ""
+}
+
 func (r *ModelCacheReconciler) reconcileModelCacheDelete(ctx context.Context, modelCache *praestov1alpha1.ModelCache) (ctrl.Result, error) {
 	logger := logf.FromContext(ctx)
 	if !controllerutil.ContainsFinalizer(modelCache, modelCacheFinalizer) {
@@ -304,8 +309,9 @@ func (r *ModelCacheReconciler) reconcileModelCacheDelete(ctx context.Context, mo
 		return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
 	}
 
+	patch := client.MergeFrom(modelCache.DeepCopy())
 	controllerutil.RemoveFinalizer(modelCache, modelCacheFinalizer)
-	if err := r.Update(ctx, modelCache); err != nil {
+	if err := r.Patch(ctx, modelCache, patch); err != nil {
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
@@ -334,7 +340,7 @@ func (r *ModelCacheReconciler) ensureModelCacheNode(ctx context.Context, modelCa
 		return nil, err
 	}
 
-	if current.Spec.ModelCacheRef != desired.Spec.ModelCacheRef || current.Spec.NodeName != desired.Spec.NodeName || current.Spec.StorageClass != desired.Spec.StorageClass {
+	if current.Spec.ModelCacheRef != desired.Spec.ModelCacheRef || current.Spec.NodeName != desired.Spec.NodeName || current.Spec.Storage != desired.Spec.Storage {
 		current.Labels = desired.Labels
 		current.Spec = desired.Spec
 		if err := r.Update(ctx, current); err != nil {
@@ -362,8 +368,11 @@ func desiredModelCacheNode(modelCache *praestov1alpha1.ModelCache, nodeName stri
 				Name:      modelCache.Name,
 				UID:       string(modelCache.UID),
 			},
-			NodeName:     nodeName,
-			StorageClass: modelCache.Spec.Storage.StorageClassName,
+			NodeName: nodeName,
+			Storage: praestov1alpha1.StorageNode{
+				StorageClassName: modelCache.Spec.Storage.StorageClassName,
+				Size:             modelCache.Spec.Storage.Size,
+			},
 		},
 	}
 }

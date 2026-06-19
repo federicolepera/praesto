@@ -21,6 +21,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -42,6 +43,21 @@ var _ = Describe("ModelCacheNode Controller", func() {
 		modelcachenode := &praestov1alpha1.ModelCacheNode{}
 
 		BeforeEach(func() {
+			praestoNamespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "praesto-system"}}
+			if err := k8sClient.Create(ctx, praestoNamespace); err != nil {
+				Expect(errors.IsAlreadyExists(err)).To(BeTrue())
+			}
+			modelCache := &praestov1alpha1.ModelCache{
+				ObjectMeta: metav1.ObjectMeta{Name: "tinyllama", Namespace: "default"},
+				Spec: praestov1alpha1.ModelCacheSpec{
+					Source:  praestov1alpha1.Source{Huggingface: praestov1alpha1.HuggingfaceSource{Repo: "org/model"}},
+					Storage: praestov1alpha1.Storage{Size: "1Gi"},
+				},
+			}
+			if err := k8sClient.Create(ctx, modelCache); err != nil {
+				Expect(errors.IsAlreadyExists(err)).To(BeTrue())
+			}
+
 			By("creating the custom resource for the Kind ModelCacheNode")
 			err := k8sClient.Get(ctx, typeNamespacedName, modelcachenode)
 			if err != nil && errors.IsNotFound(err) {
@@ -49,7 +65,13 @@ var _ = Describe("ModelCacheNode Controller", func() {
 					ObjectMeta: metav1.ObjectMeta{
 						Name: resourceName,
 					},
-					// TODO(user): Specify other spec details if needed.
+					Spec: praestov1alpha1.ModelCacheNodeSpec{
+						ModelCacheRef: praestov1alpha1.ModelCacheNodeModelCacheRef{Namespace: "default", Name: "tinyllama"},
+						NodeName:      "worker-1",
+						Storage: praestov1alpha1.StorageNode{
+							Size: "1Gi",
+						},
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}

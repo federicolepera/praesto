@@ -58,7 +58,7 @@ var _ = Describe("ModelCache Controller", func() {
 				Source: praestov1alpha1.Source{Huggingface: praestov1alpha1.HuggingfaceSource{
 					Repo:     "org/model",
 					Revision: "main",
-					Token:    praestov1alpha1.Token{SecretRef: praestov1alpha1.SecretRef{Name: "hf-secret", Key: "token"}},
+					Token:    &praestov1alpha1.Token{SecretRef: praestov1alpha1.SecretRef{Name: "hf-secret", Key: "token"}},
 				}},
 				Storage: praestov1alpha1.Storage{
 					StorageClassName: storageClassName,
@@ -273,18 +273,6 @@ var _ = Describe("ModelCache Controller", func() {
 		localModelCacheName := fmt.Sprintf("node-cache-%s", rand.String(8))
 		localModelCacheKey := types.NamespacedName{Name: localModelCacheName, Namespace: namespace}
 		nodeName := fmt.Sprintf("worker-%s", rand.String(8))
-		praestoStorageClassName := "praesto.storage.csi.io"
-
-		praestoStorageClass := testStorageClass(praestoStorageClassName)
-		if err := k8sClient.Create(ctx, praestoStorageClass); err != nil {
-			Expect(errors.IsAlreadyExists(err)).To(BeTrue())
-		}
-		DeferCleanup(func() {
-			storageClass := &storagev1.StorageClass{}
-			if err := k8sClient.Get(ctx, types.NamespacedName{Name: praestoStorageClassName}, storageClass); err == nil {
-				_ = k8sClient.Delete(ctx, storageClass)
-			}
-		})
 
 		node := &corev1.Node{
 			ObjectMeta: metav1.ObjectMeta{
@@ -300,11 +288,10 @@ var _ = Describe("ModelCache Controller", func() {
 			Spec: praestov1alpha1.ModelCacheSpec{
 				Source: praestov1alpha1.Source{Huggingface: praestov1alpha1.HuggingfaceSource{
 					Repo:  "org/model",
-					Token: praestov1alpha1.Token{SecretRef: praestov1alpha1.SecretRef{Name: "hf-secret", Key: "token"}},
+					Token: &praestov1alpha1.Token{SecretRef: praestov1alpha1.SecretRef{Name: "hf-secret", Key: "token"}},
 				}},
 				Storage: praestov1alpha1.Storage{
-					StorageClassName: praestoStorageClassName,
-					Size:             "1Gi",
+					Size: "1Gi",
 				},
 				NodeSelector: map[string]string{"praesto.io/cache-node": "true"},
 			},
@@ -341,18 +328,6 @@ var _ = Describe("ModelCache Controller", func() {
 		localModelCacheName := fmt.Sprintf("delete-cache-%s", rand.String(8))
 		localModelCacheKey := types.NamespacedName{Name: localModelCacheName, Namespace: namespace}
 		nodeName := fmt.Sprintf("worker-%s", rand.String(8))
-		praestoStorageClassName := "praesto.storage.csi.io"
-
-		praestoStorageClass := testStorageClass(praestoStorageClassName)
-		if err := k8sClient.Create(ctx, praestoStorageClass); err != nil {
-			Expect(errors.IsAlreadyExists(err)).To(BeTrue())
-		}
-		DeferCleanup(func() {
-			storageClass := &storagev1.StorageClass{}
-			if err := k8sClient.Get(ctx, types.NamespacedName{Name: praestoStorageClassName}, storageClass); err == nil {
-				_ = k8sClient.Delete(ctx, storageClass)
-			}
-		})
 
 		node := &corev1.Node{
 			ObjectMeta: metav1.ObjectMeta{
@@ -368,11 +343,10 @@ var _ = Describe("ModelCache Controller", func() {
 			Spec: praestov1alpha1.ModelCacheSpec{
 				Source: praestov1alpha1.Source{Huggingface: praestov1alpha1.HuggingfaceSource{
 					Repo:  "org/model",
-					Token: praestov1alpha1.Token{SecretRef: praestov1alpha1.SecretRef{Name: "hf-secret", Key: "token"}},
+					Token: &praestov1alpha1.Token{SecretRef: praestov1alpha1.SecretRef{Name: "hf-secret", Key: "token"}},
 				}},
 				Storage: praestov1alpha1.Storage{
-					StorageClassName: praestoStorageClassName,
-					Size:             "1Gi",
+					Size: "1Gi",
 				},
 				NodeSelector: map[string]string{"praesto.io/cache-node": "true"},
 			},

@@ -53,12 +53,20 @@ spec:
                 type: object
               nodeName:
                 type: string
-              storageClassName:
-                type: string
+              storage:
+                properties:
+                  size:
+                    type: string
+                  storageClassName:
+                    type: string
+                required:
+                - size
+                - storageClassName
+                type: object
             required:
             - modelCacheRef
             - nodeName
-            - storageClassName
+            - storage
             type: object
           status:
             description: status defines the observed state of ModelCacheNode
@@ -124,6 +132,8 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              downloadJobName:
+                type: string
               localPath:
                 type: string
               phase:

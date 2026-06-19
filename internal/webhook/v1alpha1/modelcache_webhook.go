@@ -179,11 +179,6 @@ func validateOptionalQuantity(value string, path *field.Path) field.ErrorList {
 func validateStorage(modelCache *praestov1alpha1.ModelCache, path *field.Path) field.ErrorList {
 	var allErrs field.ErrorList
 
-	storageClassNamePath := path.Child("storageClassName")
-	if modelCache.Spec.Storage.StorageClassName == "" {
-		allErrs = append(allErrs, field.Required(storageClassNamePath, "storageClassName is required"))
-	}
-
 	sizePath := path.Child("size")
 	if modelCache.Spec.Storage.Size == "" {
 		allErrs = append(allErrs, field.Required(sizePath, "storage size is required"))
@@ -209,6 +204,10 @@ func validateSource(modelCache *praestov1alpha1.ModelCache, path *field.Path) fi
 	huggingfacePath := path.Child("huggingface")
 	if modelCache.Spec.Source.Huggingface.Repo == "" {
 		allErrs = append(allErrs, field.Required(huggingfacePath.Child("repo"), "huggingface repo is required"))
+	}
+
+	if modelCache.Spec.Source.Huggingface.Token == nil {
+		return allErrs
 	}
 
 	secretRef := modelCache.Spec.Source.Huggingface.Token.SecretRef

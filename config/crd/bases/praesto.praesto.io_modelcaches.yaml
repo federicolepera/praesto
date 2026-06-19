@@ -204,11 +204,9 @@ spec:
                     minLength: 1
                     type: string
                   storageClassName:
-                    minLength: 1
                     type: string
                 required:
                 - size
-                - storageClassName
                 type: object
             required:
             - source

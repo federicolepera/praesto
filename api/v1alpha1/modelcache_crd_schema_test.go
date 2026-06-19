@@ -29,9 +29,8 @@ func TestModelCacheCRDSchemaValidation(t *testing.T) {
 	assertMinLengthOne(t, schemaMap(t, secretRef, "properties", "name"))
 
 	storage := schemaMap(t, spec, "properties", "storage")
-	assertRequired(t, storage, "size", "storageClassName")
+	assertRequired(t, storage, "size")
 	assertMinLengthOne(t, schemaMap(t, storage, "properties", "size"))
-	assertMinLengthOne(t, schemaMap(t, storage, "properties", "storageClassName"))
 
 	procMount := schemaMap(t, spec, "properties", "downloader", "properties", "containerSecurityContext", "properties", "procMount")
 	assertEnum(t, procMount, "Default", "Unmasked")
