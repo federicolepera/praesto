@@ -383,7 +383,9 @@ The webhook:
 
 - reads the requested `ModelCache` from the Pod namespace
 - requires the `ModelCache` to be `Ready`
-- injects the generated PVC as a read-only volume
+- injects a read-only volume:
+  - CSI volume for local per-node caches (`spec.storage.storageClassName` empty)
+  - PVC volume for the legacy RWX flow (`spec.storage.storageClassName` set)
 - mounts it into the target container, or the first container when no target is configured
 
 The webhook uses `failurePolicy: Fail` inside opt-in namespaces. If Praesto is unavailable, annotated Pods in enabled namespaces are rejected instead of running without their model cache.
@@ -459,6 +461,29 @@ Current quickstart samples:
 |------|---------|
 | `config/samples/quickstart/00-modelcache-tinyllama.yaml` | Creates the TinyLlama `ModelCache` |
 | `config/samples/quickstart/01-tokenizer-deployment.yaml` | Creates a lightweight tokenizer workload that uses the cache |
+
+CSI/local-cache samples:
+
+| File | Purpose |
+|------|---------|
+| `config/samples/presto.csi/modelCache.yaml` | Creates a local per-node TinyLlama `ModelCache` with CSI-style storage mode |
+| `config/samples/presto.csi/webhookDeployment.yaml` | Creates an annotated Deployment that lets the mutating webhook inject the Praesto CSI volume |
+
+For the CSI webhook sample, enable namespace opt-in first:
+
+```bash
+kubectl label namespace default praesto.io/model-cache-injection=enabled --overwrite
+kubectl apply -f config/samples/presto.csi/modelCache.yaml
+kubectl apply -f config/samples/presto.csi/webhookDeployment.yaml
+```
+
+Inspect the injected mount:
+
+```bash
+kubectl exec -it deploy/praesto-csi-webhook-test -- bash
+ls -lah /model
+findmnt /model
+```
 
 ## Local Development
 
@@ -590,7 +615,8 @@ make mutatingwebhook-delete
 - Multi-container Pods should set `praesto.io/target-container`; otherwise the mutating webhook mounts the cache into the first container.
 - The mutating webhook expects a ready `ModelCache` in the same namespace as the Pod.
 - The mutating webhook only runs in namespaces labeled `praesto.io/model-cache-injection=enabled`.
-- Storage must be provided by a user-managed RWX-capable StorageClass. Praesto validates StorageClass existence, but RWX support is diagnosed from PVC pending status because it is provisioner-specific.
+- Scheduling-aware injection is still on the roadmap. For CSI/local caches, workloads must currently be scheduled on nodes where the requested `ModelCacheNode` is ready.
+- For the legacy PVC flow, storage must be provided by a user-managed RWX-capable StorageClass. Praesto validates StorageClass existence, but RWX support is diagnosed from PVC pending status because it is provisioner-specific.
 
 ## Contributing
 
