@@ -13,6 +13,7 @@ env:
   REGISTRY: ghcr.io
   OPERATOR_IMAGE_NAME: ${{ github.repository }}
   DOWNLOADER_IMAGE_NAME: ${{ github.repository }}/downloader
+  CSI_NODE_DRIVER_IMAGE_NAME: ${{ github.repository }}/csi-node-driver
 
 jobs:
   build-and-push:
@@ -85,3 +86,26 @@ jobs:
           labels: ${{ steps.downloader-meta.outputs.labels }}
           cache-from: type=gha,scope=downloader
           cache-to: type=gha,mode=max,scope=downloader
+
+      - name: Extract CSI node driver Docker metadata
+        id: csi-node-driver-meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.CSI_NODE_DRIVER_IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push CSI node driver image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./cmd/csi-node-driver/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.csi-node-driver-meta.outputs.tags }}
+          labels: ${{ steps.csi-node-driver-meta.outputs.labels }}
+          cache-from: type=gha,scope=csi-node-driver
+          cache-to: type=gha,mode=max,scope=csi-node-driver

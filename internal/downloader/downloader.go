@@ -20,9 +20,10 @@ import (
 const DefaultDownloaderImage = "ghcr.io/federicolepera/praesto/downloader:latest"
 
 const (
-	ManagedLabelKey = "praesto.io/managed"
-	ModelLabelKey   = "praesto.io/model"
-	JobTypeLabelKey = "praesto.io/job-type"
+	ManagedLabelKey   = "praesto.io/managed"
+	ManagedLabelValue = "true"
+	ModelLabelKey     = "praesto.io/model"
+	JobTypeLabelKey   = "praesto.io/job-type"
 )
 
 func PVCNameForModelCache(name string) string { return fmt.Sprintf("praesto-%s", name) }
@@ -42,7 +43,7 @@ func JobNameForModelCacheNode(name string) string { return fmt.Sprintf("praesto-
 func ModelCacheLabels(name string) map[string]string {
 	return map[string]string{
 		ModelLabelKey:   name,
-		ManagedLabelKey: "true",
+		ManagedLabelKey: ManagedLabelValue,
 	}
 }
 
@@ -188,7 +189,7 @@ func PersistentVolumeClaimForModelCacheNode(scheme *runtime.Scheme, modelCacheNo
 func validateModelCacheNodePVC(pvc *corev1.PersistentVolumeClaim, modelCacheNode *praestov1alpha1.ModelCacheNode) error {
 	labels := pvc.GetLabels()
 	expectedPVCName := PVNameForModelCacheNode(modelCacheNode.Spec.NodeName, modelCacheNode.Name)
-	if labels[ManagedLabelKey] != "true" || labels[ModelLabelKey] != modelCacheNode.Name || pvc.Name != expectedPVCName {
+	if labels[ManagedLabelKey] != ManagedLabelValue || labels[ModelLabelKey] != modelCacheNode.Name || pvc.Name != expectedPVCName {
 		return fmt.Errorf(
 			"PVC %s/%s already exists but is not managed by praesto for ModelCacheNode %s/%s; expected name %s and labels %s=true and %s=%s",
 			pvc.Namespace,
@@ -221,7 +222,7 @@ func GetManagedModelCachePVC(ctx context.Context, reader client.Reader, modelCac
 func validateModelCacheNodePV(pv *corev1.PersistentVolume, modelCacheNode *praestov1alpha1.ModelCacheNode) error {
 	labels := pv.GetLabels()
 	expectedPVName := PVNameForModelCacheNode(modelCacheNode.Spec.NodeName, modelCacheNode.Name)
-	if labels[ManagedLabelKey] != "true" || labels[ModelLabelKey] != modelCacheNode.Name || pv.Name != expectedPVName {
+	if labels[ManagedLabelKey] != ManagedLabelValue || labels[ModelLabelKey] != modelCacheNode.Name || pv.Name != expectedPVName {
 		return fmt.Errorf(
 			"PV %s already exists but is not managed by praesto for ModelCacheNode %s/%s; expected name %s and labels %s=true and %s=%s",
 			pv.Name,
@@ -239,7 +240,7 @@ func validateModelCacheNodePV(pv *corev1.PersistentVolume, modelCacheNode *praes
 
 func validateManagedPVC(pvc *corev1.PersistentVolumeClaim, modelCache *praestov1alpha1.ModelCache) error {
 	labels := pvc.GetLabels()
-	if labels[ManagedLabelKey] != "true" || labels[ModelLabelKey] != modelCache.Name {
+	if labels[ManagedLabelKey] != ManagedLabelValue || labels[ModelLabelKey] != modelCache.Name {
 		return fmt.Errorf(
 			"PVC %s/%s already exists but is not managed by praesto for ModelCache %s/%s; expected labels %s=true and %s=%s",
 			pvc.Namespace,
