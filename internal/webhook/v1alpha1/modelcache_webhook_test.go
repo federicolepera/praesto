@@ -96,14 +96,20 @@ var _ = Describe("ModelCache Webhook", func() {
 			Expect(err).NotTo(HaveOccurred())
 		})
 
-		It("Should deny creation when storage fields are missing", func() {
+		It("Should deny creation when storage size is missing", func() {
 			obj.Spec.Storage.StorageClassName = ""
 			obj.Spec.Storage.Size = ""
 
 			_, err := validator.ValidateCreate(ctx, obj)
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("spec.storage.storageClassName"))
 			Expect(err.Error()).To(ContainSubstring("spec.storage.size"))
+		})
+
+		It("Should admit creation when storageClassName is omitted", func() {
+			obj.Spec.Storage.StorageClassName = ""
+
+			_, err := validator.ValidateCreate(ctx, obj)
+			Expect(err).NotTo(HaveOccurred())
 		})
 
 		It("Should deny creation when storage size is invalid", func() {
@@ -141,6 +147,7 @@ var _ = Describe("ModelCache Webhook", func() {
 		})
 
 		It("Should deny creation when secretRef is incomplete", func() {
+			obj.Spec.Source.Huggingface.Token = &praestov1alpha1.Token{}
 			obj.Spec.Source.Huggingface.Token.SecretRef.Name = "hf-token"
 			obj.Spec.Source.Huggingface.Token.SecretRef.Key = ""
 
@@ -166,7 +173,6 @@ var _ = Describe("ModelCache Webhook", func() {
 
 			errorMessage := err.Error()
 			for _, expected := range []string{
-				"spec.storage.storageClassName",
 				"spec.storage.size",
 				"spec.source.huggingface.repo",
 			} {

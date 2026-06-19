@@ -26,10 +26,10 @@ import (
 type SecretRef struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
-	Name string `json:"name"`
+	Name string `json:"name,omitempty"`
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
-	Key string `json:"key"`
+	Key string `json:"key,omitempty"`
 }
 type Token struct {
 	// +kubebuilder:validation:Required
@@ -40,7 +40,7 @@ type HuggingfaceSource struct {
 	// +kubebuilder:validation:MinLength=1
 	Repo     string `json:"repo"`
 	Revision string `json:"revision,omitempty"`
-	Token    Token  `json:"token,omitempty"`
+	Token    *Token `json:"token,omitempty"`
 }
 type Source struct {
 	// +kubebuilder:validation:Required
@@ -48,9 +48,8 @@ type Source struct {
 }
 
 type Storage struct {
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinLength=1
-	StorageClassName string `json:"storageClassName"`
+	// +optional
+	StorageClassName string `json:"storageClassName,omitempty"`
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	Size string `json:"size"`
@@ -112,6 +111,8 @@ type ModelCacheSpec struct {
 
 	// +optional
 	Downloader Downloader `json:"downloader,omitempty"`
+
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 }
 
 const (
@@ -128,6 +129,12 @@ type ModelCacheStatus struct {
 
 	PvcName         string `json:"pvcName,omitempty"`
 	DownloadJobName string `json:"downloadJobName,omitempty"`
+
+	TotalNodes       int32 `json:"totalNodes,omitempty"`
+	ReadyNodes       int32 `json:"readyNodes,omitempty"`
+	DownloadingNodes int32 `json:"downloadingNodes,omitempty"`
+	FailedNodes      int32 `json:"failedNodes,omitempty"`
+	PendingNodes     int32 `json:"pendingNodes,omitempty"`
 
 	// Conditions represent the latest available observations of the ModelCache state.
 	// +patchMergeKey=type

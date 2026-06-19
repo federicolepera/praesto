@@ -3,6 +3,7 @@
 # It should be run by config/default
 resources:
 - bases/praesto.praesto.io_modelcaches.yaml
+- bases/praesto.praesto.io_modelcachenodes.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:
