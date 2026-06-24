@@ -3,6 +3,7 @@ package downloader
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -19,6 +20,8 @@ import (
 
 const DefaultDownloaderImage = "ghcr.io/federicolepera/praesto/downloader:latest"
 
+const DefaultLocalCacheBasePath = "/var/praesto"
+
 const (
 	ManagedLabelKey   = "praesto.io/managed"
 	ManagedLabelValue = "true"
@@ -32,8 +35,11 @@ func PVNameForModelCacheNode(node string, name string) string {
 	return fmt.Sprintf("praesto-%s-%s", node, name)
 }
 
-func LocalPathForModelCacheNode(modelCacheNode *praestov1alpha1.ModelCacheNode) string {
-	return fmt.Sprintf("/var/praesto/%s/%s", modelCacheNode.Spec.ModelCacheRef.Namespace, modelCacheNode.Spec.ModelCacheRef.Name)
+func LocalPathForModelCacheNode(basePath string, modelCacheNode *praestov1alpha1.ModelCacheNode) string {
+	if basePath == "" {
+		basePath = DefaultLocalCacheBasePath
+	}
+	return fmt.Sprintf("%s/%s/%s", strings.TrimRight(basePath, "/"), modelCacheNode.Spec.ModelCacheRef.Namespace, modelCacheNode.Spec.ModelCacheRef.Name)
 }
 
 func JobNameForModelCache(name string) string { return fmt.Sprintf("praesto-download-%s", name) }
@@ -86,7 +92,7 @@ func EnsureModelCachePVC(ctx context.Context, k8sClient client.Client, scheme *r
 	return pvc, nil
 }
 
-func EnsureModelCacheNodePV(ctx context.Context, k8sClient client.Client, scheme *runtime.Scheme, modelCacheNode *praestov1alpha1.ModelCacheNode, pvc *corev1.PersistentVolumeClaim) (*corev1.PersistentVolume, error) {
+func EnsureModelCacheNodePV(ctx context.Context, k8sClient client.Client, scheme *runtime.Scheme, basePath string, modelCacheNode *praestov1alpha1.ModelCacheNode, pvc *corev1.PersistentVolumeClaim) (*corev1.PersistentVolume, error) {
 	pv := &corev1.PersistentVolume{}
 	name := PVNameForModelCacheNode(modelCacheNode.Spec.NodeName, modelCacheNode.Name)
 
@@ -99,7 +105,7 @@ func EnsureModelCacheNodePV(ctx context.Context, k8sClient client.Client, scheme
 		return nil, err
 	}
 
-	pv, err := PersistentVolumeForModelCacheNode(scheme, modelCacheNode, pvc)
+	pv, err := PersistentVolumeForModelCacheNode(scheme, basePath, modelCacheNode, pvc)
 	if err != nil {
 		return nil, err
 	}
@@ -256,7 +262,7 @@ func validateManagedPVC(pvc *corev1.PersistentVolumeClaim, modelCache *praestov1
 	return nil
 }
 
-func PersistentVolumeForModelCacheNode(scheme *runtime.Scheme, modelCacheNode *praestov1alpha1.ModelCacheNode, pvc *corev1.PersistentVolumeClaim) (*corev1.PersistentVolume, error) {
+func PersistentVolumeForModelCacheNode(scheme *runtime.Scheme, basePath string, modelCacheNode *praestov1alpha1.ModelCacheNode, pvc *corev1.PersistentVolumeClaim) (*corev1.PersistentVolume, error) {
 	storageSize, err := resource.ParseQuantity(modelCacheNode.Spec.Storage.Size)
 	if err != nil {
 		return nil, fmt.Errorf("invalid storage size %q: %w", modelCacheNode.Spec.Storage.Size, err)
@@ -268,7 +274,7 @@ func PersistentVolumeForModelCacheNode(scheme *runtime.Scheme, modelCacheNode *p
 			Labels: ModelCacheLabels(modelCacheNode.Name),
 		},
 		Spec: corev1.PersistentVolumeSpec{
-			PersistentVolumeSource: corev1.PersistentVolumeSource{Local: &corev1.LocalVolumeSource{Path: LocalPathForModelCacheNode(modelCacheNode)}},
+			PersistentVolumeSource: corev1.PersistentVolumeSource{Local: &corev1.LocalVolumeSource{Path: LocalPathForModelCacheNode(basePath, modelCacheNode)}},
 			ClaimRef: &corev1.ObjectReference{
 				Kind:      "PersistentVolumeClaim",
 				Name:      pvc.Name,

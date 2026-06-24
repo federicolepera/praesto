@@ -38,7 +38,8 @@ import (
 // ModelCacheNodeReconciler reconciles a ModelCacheNode object
 type ModelCacheNodeReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme             *runtime.Scheme
+	LocalCacheBasePath string
 }
 
 // +kubebuilder:rbac:groups=praesto.praesto.io,resources=modelcachenodes,verbs=get;list;watch;create;update;patch;delete
@@ -87,7 +88,7 @@ func (r *ModelCacheNodeReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 
-	pv, err := downloader.EnsureModelCacheNodePV(ctx, r.Client, r.Scheme, &modelCacheNode, pvc)
+	pv, err := downloader.EnsureModelCacheNodePV(ctx, r.Client, r.Scheme, r.LocalCacheBasePath, &modelCacheNode, pvc)
 	if err != nil {
 		logger.Error(err, "unable to ensure PV for ModelCacheNode")
 		return ctrl.Result{}, err
@@ -97,7 +98,7 @@ func (r *ModelCacheNodeReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		modelCacheNode.Status.Phase = praestov1alpha1.ModelCacheNodePhasePending
 		modelCacheNode.Status.PvcName = pvc.Name
 		modelCacheNode.Status.PvName = pv.Name
-		modelCacheNode.Status.LocalPath = downloader.LocalPathForModelCacheNode(&modelCacheNode)
+		modelCacheNode.Status.LocalPath = downloader.LocalPathForModelCacheNode(r.LocalCacheBasePath, &modelCacheNode)
 		setModelCacheNodeCondition(&modelCacheNode, "PVCReady", metav1.ConditionFalse, "PVCPending", fmt.Sprintf("PVC %s/%s is not bound yet", pvc.Namespace, pvc.Name))
 		if err := r.Status().Update(ctx, &modelCacheNode); err != nil {
 			return ctrl.Result{}, err
@@ -117,7 +118,7 @@ func (r *ModelCacheNodeReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		modelCacheNode.Status.PvcName = pvc.Name
 		modelCacheNode.Status.PvName = pv.Name
 		modelCacheNode.Status.DownloadJobName = job.Name
-		modelCacheNode.Status.LocalPath = downloader.LocalPathForModelCacheNode(&modelCacheNode)
+		modelCacheNode.Status.LocalPath = downloader.LocalPathForModelCacheNode(r.LocalCacheBasePath, &modelCacheNode)
 		setModelCacheNodeCondition(&modelCacheNode, "PVCReady", metav1.ConditionTrue, "PVCBound", fmt.Sprintf("PVC %s/%s is bound", pvc.Namespace, pvc.Name))
 		setModelCacheNodeCondition(&modelCacheNode, "DownloadComplete", metav1.ConditionFalse, "JobFailed", err.Error())
 		setModelCacheNodeCondition(&modelCacheNode, "Ready", metav1.ConditionFalse, "DownloadFailed", "Model is not ready because download job failed")
@@ -130,7 +131,7 @@ func (r *ModelCacheNodeReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	modelCacheNode.Status.PvcName = pvc.Name
 	modelCacheNode.Status.PvName = pv.Name
 	modelCacheNode.Status.DownloadJobName = job.Name
-	modelCacheNode.Status.LocalPath = downloader.LocalPathForModelCacheNode(&modelCacheNode)
+	modelCacheNode.Status.LocalPath = downloader.LocalPathForModelCacheNode(r.LocalCacheBasePath, &modelCacheNode)
 	setModelCacheNodeCondition(&modelCacheNode, "PVCReady", metav1.ConditionTrue, "PVCBound", fmt.Sprintf("PVC %s/%s is bound", pvc.Namespace, pvc.Name))
 	if jobComplete {
 		modelCacheNode.Status.Phase = praestov1alpha1.ModelCacheNodePhaseReady
