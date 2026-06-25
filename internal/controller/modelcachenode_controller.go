@@ -82,6 +82,16 @@ func (r *ModelCacheNodeReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	modelCacheNode.Status.LocalPath = downloader.LocalPathForModelCacheNode(r.LocalCacheBasePath, &modelCacheNode)
+	if !meta.IsStatusConditionTrue(modelCacheNode.Status.Conditions, praestov1alpha1.ModelCacheNodeConditionDirectoryReady) {
+		modelCacheNode.Status.Phase = praestov1alpha1.ModelCacheNodePhasePending
+		setModelCacheNodeCondition(&modelCacheNode, praestov1alpha1.ModelCacheNodeConditionReady, metav1.ConditionFalse, "DirectoryNotReady", "Model cache directory is not ready on this node")
+		if err := r.Status().Update(ctx, &modelCacheNode); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
 	pvc, err := downloader.EnsureModelCacheNodePVC(ctx, r.Client, r.Scheme, &modelCacheNode)
 	if err != nil {
 		logger.Error(err, "unable to ensure PVC for ModelCacheNode")
@@ -99,7 +109,7 @@ func (r *ModelCacheNodeReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		modelCacheNode.Status.PvcName = pvc.Name
 		modelCacheNode.Status.PvName = pv.Name
 		modelCacheNode.Status.LocalPath = downloader.LocalPathForModelCacheNode(r.LocalCacheBasePath, &modelCacheNode)
-		setModelCacheNodeCondition(&modelCacheNode, "PVCReady", metav1.ConditionFalse, "PVCPending", fmt.Sprintf("PVC %s/%s is not bound yet", pvc.Namespace, pvc.Name))
+		setModelCacheNodeCondition(&modelCacheNode, praestov1alpha1.ModelCacheNodeConditionPVCReady, metav1.ConditionFalse, "PVCPending", fmt.Sprintf("PVC %s/%s is not bound yet", pvc.Namespace, pvc.Name))
 		if err := r.Status().Update(ctx, &modelCacheNode); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -119,9 +129,9 @@ func (r *ModelCacheNodeReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		modelCacheNode.Status.PvName = pv.Name
 		modelCacheNode.Status.DownloadJobName = job.Name
 		modelCacheNode.Status.LocalPath = downloader.LocalPathForModelCacheNode(r.LocalCacheBasePath, &modelCacheNode)
-		setModelCacheNodeCondition(&modelCacheNode, "PVCReady", metav1.ConditionTrue, "PVCBound", fmt.Sprintf("PVC %s/%s is bound", pvc.Namespace, pvc.Name))
-		setModelCacheNodeCondition(&modelCacheNode, "DownloadComplete", metav1.ConditionFalse, "JobFailed", err.Error())
-		setModelCacheNodeCondition(&modelCacheNode, "Ready", metav1.ConditionFalse, "DownloadFailed", "Model is not ready because download job failed")
+		setModelCacheNodeCondition(&modelCacheNode, praestov1alpha1.ModelCacheNodeConditionPVCReady, metav1.ConditionTrue, "PVCBound", fmt.Sprintf("PVC %s/%s is bound", pvc.Namespace, pvc.Name))
+		setModelCacheNodeCondition(&modelCacheNode, praestov1alpha1.ModelCacheNodeConditionDownloadComplete, metav1.ConditionFalse, "JobFailed", err.Error())
+		setModelCacheNodeCondition(&modelCacheNode, praestov1alpha1.ModelCacheNodeConditionReady, metav1.ConditionFalse, "DownloadFailed", "Model is not ready because download job failed")
 		if updateErr := r.Status().Update(ctx, &modelCacheNode); updateErr != nil {
 			return ctrl.Result{}, updateErr
 		}
@@ -132,15 +142,15 @@ func (r *ModelCacheNodeReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	modelCacheNode.Status.PvName = pv.Name
 	modelCacheNode.Status.DownloadJobName = job.Name
 	modelCacheNode.Status.LocalPath = downloader.LocalPathForModelCacheNode(r.LocalCacheBasePath, &modelCacheNode)
-	setModelCacheNodeCondition(&modelCacheNode, "PVCReady", metav1.ConditionTrue, "PVCBound", fmt.Sprintf("PVC %s/%s is bound", pvc.Namespace, pvc.Name))
+	setModelCacheNodeCondition(&modelCacheNode, praestov1alpha1.ModelCacheNodeConditionPVCReady, metav1.ConditionTrue, "PVCBound", fmt.Sprintf("PVC %s/%s is bound", pvc.Namespace, pvc.Name))
 	if jobComplete {
 		modelCacheNode.Status.Phase = praestov1alpha1.ModelCacheNodePhaseReady
-		setModelCacheNodeCondition(&modelCacheNode, "DownloadComplete", metav1.ConditionTrue, "JobSucceeded", "Download job completed successfully")
-		setModelCacheNodeCondition(&modelCacheNode, "Ready", metav1.ConditionTrue, "ModelReady", "Model is ready on this node")
+		setModelCacheNodeCondition(&modelCacheNode, praestov1alpha1.ModelCacheNodeConditionDownloadComplete, metav1.ConditionTrue, "JobSucceeded", "Download job completed successfully")
+		setModelCacheNodeCondition(&modelCacheNode, praestov1alpha1.ModelCacheNodeConditionReady, metav1.ConditionTrue, "ModelReady", "Model is ready on this node")
 	} else {
 		modelCacheNode.Status.Phase = praestov1alpha1.ModelCacheNodePhaseDownloading
-		setModelCacheNodeCondition(&modelCacheNode, "DownloadComplete", metav1.ConditionFalse, "JobRunning", "Download job is still running")
-		setModelCacheNodeCondition(&modelCacheNode, "Ready", metav1.ConditionFalse, "Downloading", "Model is downloading on this node")
+		setModelCacheNodeCondition(&modelCacheNode, praestov1alpha1.ModelCacheNodeConditionDownloadComplete, metav1.ConditionFalse, "JobRunning", "Download job is still running")
+		setModelCacheNodeCondition(&modelCacheNode, praestov1alpha1.ModelCacheNodeConditionReady, metav1.ConditionFalse, "Downloading", "Model is downloading on this node")
 	}
 	if err := r.Status().Update(ctx, &modelCacheNode); err != nil {
 		return ctrl.Result{}, err
