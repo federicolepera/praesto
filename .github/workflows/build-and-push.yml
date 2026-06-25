@@ -14,6 +14,7 @@ env:
   OPERATOR_IMAGE_NAME: ${{ github.repository }}
   DOWNLOADER_IMAGE_NAME: ${{ github.repository }}/downloader
   CSI_NODE_DRIVER_IMAGE_NAME: ${{ github.repository }}/csi-node-driver
+  NODE_AGENT_IMAGE_NAME: ${{ github.repository }}/node-agent
 
 jobs:
   build-and-push:
@@ -109,3 +110,26 @@ jobs:
           labels: ${{ steps.csi-node-driver-meta.outputs.labels }}
           cache-from: type=gha,scope=csi-node-driver
           cache-to: type=gha,mode=max,scope=csi-node-driver
+
+      - name: Extract node agent Docker metadata
+        id: node-agent-meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.NODE_AGENT_IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push node agent image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./cmd/node-agent/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.node-agent-meta.outputs.tags }}
+          labels: ${{ steps.node-agent-meta.outputs.labels }}
+          cache-from: type=gha,scope=node-agent
+          cache-to: type=gha,mode=max,scope=node-agent

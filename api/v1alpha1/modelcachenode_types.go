@@ -49,6 +49,13 @@ const (
 	ModelCacheNodePhaseEvicted     = "Evicted"
 )
 
+const (
+	ModelCacheNodeConditionDirectoryReady   = "DirectoryReady"
+	ModelCacheNodeConditionPVCReady         = "PVCReady"
+	ModelCacheNodeConditionDownloadComplete = "DownloadComplete"
+	ModelCacheNodeConditionReady            = "Ready"
+)
+
 // ModelCacheNodeStatus defines the observed state of ModelCacheNode.
 type ModelCacheNodeStatus struct {
 	// +kubebuilder:validation:Enum=Ready;Downloading;Failed;Pending;Evicted

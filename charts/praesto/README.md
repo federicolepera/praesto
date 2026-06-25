@@ -1,7 +1,7 @@
 # Praesto Helm chart
 
 This chart installs the Praesto operator, CRDs, RBAC, cert-manager webhook
-certificate resources, services, admission webhooks, and the CSI node driver.
+certificate resources, services, admission webhooks, the CSI node driver, and the node-agent DaemonSet.
 
 ## Prerequisites
 
@@ -22,7 +22,9 @@ helm install praesto ./charts/praesto \
   --namespace praesto-system \
   --create-namespace \
   --set image.tag=0.1.0 \
-  --set downloader.image.tag=0.1.0
+  --set downloader.image.tag=0.1.0 \
+  --set csi.image.tag=0.1.0 \
+  --set nodeAgent.image.tag=0.1.0
 ```
 
 ## Pod injection opt-in
@@ -46,6 +48,10 @@ kubectl label namespace <namespace> praesto.io/model-cache-injection=enabled
 | `csi.driverName` | `csi.praesto.io` | CSI driver name used by injected volumes |
 | `csi.image.repository` | `ghcr.io/federicolepera/praesto/csi-node-driver` | CSI node driver image repository |
 | `csi.image.tag` | `0.1.0` | CSI node driver image tag |
+| `nodeAgent.enabled` | `true` | Install the Praesto node-agent DaemonSet |
+| `nodeAgent.image.repository` | `ghcr.io/federicolepera/praesto/node-agent` | Node-agent image repository |
+| `nodeAgent.image.tag` | `0.1.0` | Node-agent image tag |
+| `nodeAgent.nodeSelector` | `{}` | Node selector used to schedule the node-agent DaemonSet |
 | `webhooks.enabled` | `true` | Install admission webhooks |
 | `webhooks.certManager.enabled` | `true` | Use cert-manager CA injection and serving cert |
 | `webhooks.mutating.namespaceSelector` | opt-in label | Namespace selector for Pod mutation |

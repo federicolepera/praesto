@@ -1,0 +1,87 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: smollm2-inference
+  namespace: praesto-demo
+  labels:
+    app.kubernetes.io/name: smollm2-inference
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: smollm2-inference
+      annotations:
+        praesto.io/model-cache: smollm2-demo
+        praesto.io/model-mount-path: /model
+        praesto.io/target-container: infer
+    spec:
+      restartPolicy: Never
+      # Optional for multi-node demos. Keep this aligned with the ModelCache
+      # spec.nodeSelector when using node-local caches on selected nodes.
+      # nodeSelector:
+      #   kubernetes.io/hostname: <node-name>
+      containers:
+        - name: infer
+          image: python:3.11-slim
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: TRANSFORMERS_OFFLINE
+              value: "1"
+            - name: HF_HUB_OFFLINE
+              value: "1"
+            - name: PROMPT
+              value: "In una frase semplice, spiega a cosa serve una cache locale su un nodo Kubernetes."
+          command:
+            - sh
+            - -ec
+            - |
+              python -m pip install --no-cache-dir --upgrade pip
+              python -m pip install --no-cache-dir \
+                --index-url https://download.pytorch.org/whl/cpu \
+                torch
+              python -m pip install --no-cache-dir transformers safetensors
+
+              python - <<'PY'
+              import os
+              from pathlib import Path
+
+              import torch
+              from transformers import AutoModelForCausalLM, AutoTokenizer
+
+              model_path = Path("/model")
+              print("Mounted files:")
+              for path in sorted(model_path.iterdir()):
+                  print(f"- {path.name}")
+
+              tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True)
+              model = AutoModelForCausalLM.from_pretrained(
+                  model_path,
+                  local_files_only=True,
+                  torch_dtype=torch.float32,
+              )
+              model.eval()
+
+              user_prompt = os.environ["PROMPT"]
+              print("\nPROMPT:")
+              print(user_prompt)
+
+              messages = [{"role": "user", "content": user_prompt}]
+              prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+              inputs = tokenizer(prompt, return_tensors="pt")
+
+              with torch.no_grad():
+                  outputs = model.generate(
+                      **inputs,
+                      max_new_tokens=64,
+                      do_sample=False,
+                      pad_token_id=tokenizer.eos_token_id,
+                  )
+
+              answer_tokens = outputs[0][inputs["input_ids"].shape[-1]:]
+              answer = tokenizer.decode(answer_tokens, skip_special_tokens=True).strip()
+              print("\nANSWER:")
+              print(answer)
+              print("PRAESTO_LLM_SMOKE_OK")
+              PY

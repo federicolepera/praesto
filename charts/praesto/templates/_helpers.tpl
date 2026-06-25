@@ -98,3 +98,21 @@ app.kubernetes.io/name: {{ include "praesto.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: csi-node
 {{- end -}}
+
+{{- define "praesto.nodeAgentServiceAccountName" -}}
+{{- if .Values.nodeAgent.serviceAccount.create -}}
+{{- default (printf "%s-node-agent" (include "praesto.fullname" .)) .Values.nodeAgent.serviceAccount.name -}}
+{{- else -}}
+{{- default "default" .Values.nodeAgent.serviceAccount.name -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "praesto.nodeAgentName" -}}
+{{- printf "%s-node-agent" (include "praesto.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "praesto.nodeAgentSelectorLabels" -}}
+app.kubernetes.io/name: {{ include "praesto.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: node-agent
+{{- end -}}
