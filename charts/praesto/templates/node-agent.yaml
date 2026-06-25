@@ -1,0 +1,93 @@
+{{- if .Values.nodeAgent.enabled }}
+{{- if .Values.nodeAgent.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "praesto.nodeAgentServiceAccountName" . }}
+  namespace: {{ include "praesto.namespace" . }}
+  labels:
+    {{- include "praesto.labels" . | nindent 4 }}
+    app.kubernetes.io/component: node-agent
+  {{- with .Values.nodeAgent.serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "praesto.nodeAgentName" . }}
+  namespace: {{ include "praesto.namespace" . }}
+  labels:
+    {{- include "praesto.labels" . | nindent 4 }}
+    app.kubernetes.io/component: node-agent
+spec:
+  selector:
+    matchLabels:
+      {{- include "praesto.nodeAgentSelectorLabels" . | nindent 6 }}
+  {{- with .Values.nodeAgent.updateStrategy }}
+  updateStrategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  template:
+    metadata:
+      {{- with .Values.nodeAgent.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "praesto.nodeAgentSelectorLabels" . | nindent 8 }}
+        {{- with .Values.nodeAgent.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "praesto.nodeAgentServiceAccountName" . }}
+      {{- if .Values.nodeAgent.priorityClassName }}
+      priorityClassName: {{ .Values.nodeAgent.priorityClassName }}
+      {{- end }}
+      tolerations:
+        - operator: Exists
+        {{- with .Values.nodeAgent.tolerations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.nodeAgent.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeAgent.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: node-agent
+          image: "{{ .Values.nodeAgent.image.repository }}:{{ .Values.nodeAgent.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.nodeAgent.image.pullPolicy }}
+          args:
+            - --node-name=$(NODE_NAME)
+            - --cache-root={{ .Values.localCache.basePath }}
+            - --metrics-bind-address=0
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          securityContext:
+            {{- toYaml .Values.nodeAgent.securityContext | nindent 12 }}
+          {{- with .Values.nodeAgent.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: praesto-cache
+              mountPath: {{ .Values.localCache.basePath }}
+      volumes:
+        - name: praesto-cache
+          hostPath:
+            path: {{ .Values.localCache.basePath }}
+            type: Directory
+{{- end }}

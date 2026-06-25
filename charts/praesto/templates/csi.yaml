@@ -138,5 +138,5 @@ spec:
         - name: praesto-cache
           hostPath:
             path: {{ .Values.localCache.basePath }}
-            type: DirectoryOrCreate
+            type: Directory
 {{- end }}

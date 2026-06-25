@@ -76,6 +76,37 @@ subjects:
 - kind: ServiceAccount
   name: {{ include "praesto.serviceAccountName" . }}
   namespace: {{ include "praesto.namespace" . }}
+{{- if .Values.nodeAgent.enabled }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ printf "%s-node-agent-role" (include "praesto.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "praesto.labels" . | nindent 4 }}
+rules:
+- apiGroups: ["praesto.praesto.io"]
+  resources: ["modelcachenodes"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["praesto.praesto.io"]
+  resources: ["modelcachenodes/status"]
+  verbs: ["get", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ printf "%s-node-agent-rolebinding" (include "praesto.fullname" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "praesto.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ printf "%s-node-agent-role" (include "praesto.fullname" .) | trunc 63 | trimSuffix "-" }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "praesto.nodeAgentServiceAccountName" . }}
+  namespace: {{ include "praesto.namespace" . }}
+{{- end }}
 {{- if .Values.metrics.authProxy.enabled }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
