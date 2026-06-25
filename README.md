@@ -42,12 +42,16 @@
 
 ## Table of Contents
 - [What is Praesto?](#what-is-praesto)
+- [Why the CSI mode matters](#why-the-csi-mode-matters)
 - [How it Works](#how-it-works)
+- [Installation](#installation)
+  - [Prerequisites](#prerequisites)
+  - [Prepare node local cache storage](#prepare-node-local-cache-storage)
+  - [Install with Helm](#install-with-helm)
+  - [Install with Kustomize](#install-with-kustomize)
 - [Storage modes](#storage-modes)
 - [Quickstart](#quickstart)
-  - [Prerequisites](#prerequisites)
-  - [Helm](#helm)
-  - [Kustomize](#kustomize)
+  - [Why this quickstart uses legacy PVC mode](#why-this-quickstart-uses-legacy-pvc-mode)
   - [Create a ModelCache](#create-a-modelcache)
   - [Mount the ModelCache in a workload](#mount-the-modelcache-in-a-workload)
   - [Verify the mounted files](#verify-the-mounted-files)
@@ -58,6 +62,7 @@
   - [Pod Annotations](#pod-annotations)
   - [Downloader Settings](#downloader-settings)
 - [Samples](#samples)
+- [Documentation](#documentation)
 - [Local Development](#local-development)
 - [Local Webhook Debugging](#local-webhook-debugging)
 - [Requirements](#requirements)
@@ -76,12 +81,30 @@ The core workflow is the local CSI mode:
 
 - **ModelCache CRD**: declare which model should be cached.
 - **ModelCacheNode CRD**: represent the model cache state on each Kubernetes node.
-- **Local node cache**: store model files under `/var/praesto/<namespace>/<modelcache>`.
+- **Local node cache**: store model files under `/var/praesto/<namespace>/<modelcache>` by default; the base path is configurable with `localCache.basePath`.
+- **Node agent**: prepare per-cache directories on nodes under the configured base path.
 - **Downloader Job per node**: download HuggingFace artifacts into the local cache.
 - **CSI node driver**: mount the local cache into user Pods with a CSI inline volume.
 - **Mutating webhook**: inject the CSI volume into annotated Pods.
 
 Praesto also keeps a legacy RWX PVC mode for clusters that already provide a shared `ReadWriteMany` StorageClass.
+
+## Why the CSI mode matters
+
+The main value of Praesto is the **local CSI mode**.
+
+Large model files should not be downloaded again by every application Pod. They also should not require every user workload to know about internal PVCs, downloader Jobs, or node-local paths.
+
+With Praesto local CSI mode:
+
+- the administrator prepares only a base directory on cache-capable nodes, for example `/var/praesto`;
+- Praesto creates one `ModelCacheNode` per selected node;
+- the node-agent prepares the per-model directory on the node;
+- a downloader Job fills that local cache once;
+- application Pods request the model with annotations;
+- the CSI driver mounts the ready model into the Pod read-only.
+
+That gives workloads a simple mount path while keeping model distribution node-local and Kubernetes-native.
 
 ## How it Works
 
@@ -89,6 +112,8 @@ Praesto also keeps a legacy RWX PVC mode for clusters that already provide a sha
 ModelCache
   ↓
 ModelCacheNode per selected node
+  ↓
+Praesto node-agent prepares /var/praesto/<namespace>/<modelcache>
   ↓
 Local PV/PVC + downloader Job on each node
   ↓
@@ -99,7 +124,118 @@ Praesto CSI node driver
 Annotated Pod with read-only model mount
 ```
 
-In local CSI mode, Praesto reconciles each `ModelCache` by creating one cluster-scoped `ModelCacheNode` per target node. Each `ModelCacheNode` owns the node-local storage preparation and downloader Job. Once the node cache is ready, workloads can request the cache with Pod annotations and the mutating webhook injects a CSI volume using the `csi.praesto.io` driver.
+In local CSI mode, Praesto reconciles each `ModelCache` by creating one cluster-scoped `ModelCacheNode` per target node. The Praesto node-agent prepares the node-local directory, the controller creates the local PV/PVC and downloader Job, and the CSI driver later mounts the ready cache into annotated workloads through the `csi.praesto.io` driver.
+
+## Installation
+
+Install Praesto first, then create `ModelCache` resources and annotated workloads.
+
+### Prerequisites
+
+You need:
+
+- a Kubernetes cluster
+- `kubectl`
+- `helm` if installing via the Helm chart
+- cert-manager installed in the cluster when `webhooks.certManager.enabled=true` (default)
+- for local CSI mode, node-local storage prepared as described below
+- for legacy PVC mode, a StorageClass that supports `ReadWriteMany`
+
+### Prepare node local cache storage
+
+For local CSI mode, prepare the cache base path on every node where Praesto may cache models. This is typically a fast local SSD mount:
+
+```text
+/var/praesto
+```
+
+Example on each cache-capable node:
+
+```bash
+sudo mkdir -p /var/praesto
+sudo chmod 0775 /var/praesto
+```
+
+If you use a different path, set it in Helm:
+
+```yaml
+localCache:
+  basePath: /mnt/fast-ssd/praesto
+```
+
+Praesto expects the base path to already exist. The `praesto-node-agent` DaemonSet creates per-cache directories below it:
+
+```text
+<basePath>/<namespace>/<modelcache>
+```
+
+To run the node-agent only on selected nodes, label those nodes and configure `nodeAgent.nodeSelector`:
+
+```bash
+kubectl label node <node-name> praesto.io/cache-node=true
+```
+
+```yaml
+nodeAgent:
+  nodeSelector:
+    praesto.io/cache-node: "true"
+```
+
+### Install with Helm
+
+Install Praesto with the local chart:
+
+```bash
+helm install praesto ./charts/praesto \
+  --namespace praesto-system \
+  --create-namespace
+```
+
+Pin release images explicitly:
+
+```bash
+helm install praesto ./charts/praesto \
+  --namespace praesto-system \
+  --create-namespace \
+  --set image.tag=0.1.0 \
+  --set downloader.image.tag=0.1.0 \
+  --set csi.image.tag=0.1.0 \
+  --set nodeAgent.image.tag=0.1.0
+```
+
+The chart can also be published and installed as an OCI Helm package from GHCR:
+
+```bash
+helm install praesto oci://ghcr.io/federicolepera/praesto/charts/praesto \
+  --version 0.1.0 \
+  --namespace praesto-system \
+  --create-namespace
+```
+
+Wait for Praesto components:
+
+```bash
+kubectl get pods -n praesto-system
+```
+
+With local CSI mode enabled, you should see the controller manager, CSI node DaemonSet, and node-agent DaemonSet running in `praesto-system`.
+
+See the [Chart documentation](charts/praesto/README.md) for the full values reference and CRD upgrade notes.
+
+### Install with Kustomize
+
+Install CRDs, RBAC, controller, webhook service, and cert-manager webhook certificates:
+
+```bash
+kubectl apply -k config/default
+```
+
+This installs the published operator image `ghcr.io/federicolepera/praesto:latest`.
+For reproducible installs, pin a release tag instead:
+
+```bash
+make deploy IMG=ghcr.io/federicolepera/praesto:0.1.0
+```
 
 ## Storage modes
 
@@ -151,7 +287,7 @@ Praesto will then use paths like:
 /mnt/fast-ssd/praesto/<namespace>/<modelcache>
 ```
 
-The base path should point to storage that exists on every node where models may be cached, for example a mounted local SSD. Praesto does not currently create the node-local source directory automatically; this is planned for the node agent.
+The base path must exist on every node where models may be cached, for example a mounted local SSD. The administrator prepares only this base path. The Praesto node-agent creates the per-model directories below it, for example `/var/praesto/<namespace>/<modelcache>`.
 
 ### Legacy RWX PVC mode: `storageClassName` set
 
@@ -172,25 +308,30 @@ This mode requires a StorageClass that supports `ReadWriteMany` if multiple Pods
 
 ## Quickstart
 
-The quickstart validates the legacy RWX PVC flow:
+The quickstart below validates the legacy RWX PVC flow:
 
 ```text
 ModelCache → PVC → downloader Job → Ready status → annotated Deployment → mounted model files
 ```
 
-For the local CSI flow, use the samples in `config/samples/presto.csi/`.
+For the primary local CSI flow, use the samples in `config/samples/presto.csi/`. For a full LLM inference walkthrough, see the [Demo documentation](config/samples/demo/README.md).
 
-### Prerequisites
+### Why this quickstart uses legacy PVC mode
 
-You need:
+This quickstart intentionally uses the legacy PVC mode because it is the fastest path to verify the basic operator flow on a cluster that already has an RWX-capable StorageClass.
 
-- a Kubernetes cluster
-- `kubectl`
-- `helm` if installing via the Helm chart
-- cert-manager installed in the cluster
-- the Praesto CSI node driver enabled for local CSI mode, or a StorageClass that supports `ReadWriteMany` for legacy PVC mode
+It demonstrates:
 
-The quickstart sample uses the legacy PVC mode:
+```text
+ModelCache → PVC → downloader Job → Ready status → annotated Deployment → mounted model files
+```
+
+The innovative Praesto path is still the local CSI mode described above: per-node cache, node-agent directory preparation, downloader per node, and CSI mounts into workloads. Use these samples for that flow:
+
+- [`config/samples/presto.csi/`](config/samples/presto.csi/) for a small CSI mount example
+- [Demo documentation](config/samples/demo/README.md) for the full LLM inference demo
+
+For the legacy quickstart, make sure your cluster has a StorageClass that supports `ReadWriteMany`. The sample uses:
 
 ```yaml
 storageClassName: standard
@@ -200,58 +341,6 @@ If your cluster uses a different RWX StorageClass, edit:
 
 ```text
 config/samples/quickstart/00-modelcache-tinyllama.yaml
-```
-
-### Helm
-
-Install Praesto with the local chart:
-
-```bash
-helm install praesto ./charts/praesto \
-  --namespace praesto-system \
-  --create-namespace
-```
-
-Pin release images explicitly:
-
-```bash
-helm install praesto ./charts/praesto \
-  --namespace praesto-system \
-  --create-namespace \
-  --set image.tag=0.1.0 \
-  --set downloader.image.tag=0.1.0
-```
-
-The chart can also be published and installed as an OCI Helm package from GHCR:
-
-```bash
-helm install praesto oci://ghcr.io/federicolepera/praesto/charts/praesto \
-  --version 0.1.0 \
-  --namespace praesto-system \
-  --create-namespace
-```
-
-See [`charts/praesto/README.md`](charts/praesto/README.md) for the full values reference and CRD upgrade notes.
-
-### Kustomize
-
-Install CRDs, RBAC, controller, webhook service, and cert-manager webhook certificates:
-
-```bash
-kubectl apply -k config/default
-```
-
-This installs the published operator image `ghcr.io/federicolepera/praesto:latest`.
-For reproducible installs, pin a release tag instead:
-
-```bash
-make deploy IMG=ghcr.io/federicolepera/praesto:0.1.0
-```
-
-Wait for the controller manager:
-
-```bash
-kubectl get pods -n praesto-system
 ```
 
 ### Create a ModelCache
@@ -425,13 +514,22 @@ Supported phases:
 | `Ready` | Model files are available to workloads |
 | `Failed` | PVC or downloader Job failed |
 
-Current conditions:
+Common `ModelCache` conditions:
 
 | Condition | Description |
 |-----------|-------------|
 | `PVCReady` | The model storage is bound and usable |
 | `DownloadComplete` | The downloader Job completed successfully |
 | `Ready` | The model cache is ready to be mounted by workloads |
+
+In local CSI mode, each `ModelCacheNode` also exposes per-node conditions:
+
+| Condition | Description |
+|-----------|-------------|
+| `DirectoryReady` | The Praesto node-agent prepared the node-local cache directory |
+| `PVCReady` | The per-node local PVC is bound |
+| `DownloadComplete` | The per-node downloader Job completed successfully |
+| `Ready` | The node-local model cache is ready |
 
 ## Admission Webhooks
 
@@ -506,11 +604,15 @@ Common chart values:
 | `localCache.basePath` | Host path where node-local model caches live | `/var/praesto` |
 | `csi.image.repository` | CSI node driver image repository | `ghcr.io/federicolepera/praesto/csi-node-driver` |
 | `csi.image.tag` | CSI node driver image tag | `0.1.0` |
+| `nodeAgent.enabled` | Install the Praesto node-agent DaemonSet | `true` |
+| `nodeAgent.image.repository` | Node-agent image repository | `ghcr.io/federicolepera/praesto/node-agent` |
+| `nodeAgent.image.tag` | Node-agent image tag | `0.1.0` |
+| `nodeAgent.nodeSelector` | Restrict node-agent DaemonSet to labeled nodes | `{}` |
 | `webhooks.enabled` | Install admission webhooks | `true` |
-| `certManager.enabled` | Create cert-manager issuer/certificate resources | `true` |
+| `webhooks.certManager.enabled` | Create cert-manager issuer/certificate resources | `true` |
 | `metrics.enabled` | Expose metrics service and RBAC | `true` |
 
-See [`charts/praesto/values.yaml`](charts/praesto/values.yaml) and [`charts/praesto/README.md`](charts/praesto/README.md) for all options.
+See [`charts/praesto/values.yaml`](charts/praesto/values.yaml) and the [Chart documentation](charts/praesto/README.md) for all options.
 
 ### Pod Annotations
 
@@ -560,6 +662,14 @@ CSI/local-cache samples:
 | `config/samples/presto.csi/modelCache.yaml` | Creates a local per-node TinyLlama `ModelCache` with CSI-style storage mode |
 | `config/samples/presto.csi/webhookDeployment.yaml` | Creates an annotated Deployment that lets the mutating webhook inject the Praesto CSI volume |
 
+LLM inference demo:
+
+| Path | Purpose |
+|------|---------|
+| [Demo manifests](config/samples/demo/) | End-to-end demo: download SmolLM2, mount it via CSI, and run a real CPU inference Job |
+
+See the [Demo documentation](config/samples/demo/README.md) for the full walkthrough.
+
 For the CSI webhook sample, enable namespace opt-in first:
 
 ```bash
@@ -575,6 +685,18 @@ kubectl exec -it deploy/praesto-csi-webhook-test -- bash
 ls -lah /model
 findmnt /model
 ```
+
+## Documentation
+
+The main README stays focused on the project value, installation, and a fast quickstart.
+
+Deeper explanations live under [`docs/`](docs/):
+
+| Guide | Purpose |
+|-------|---------|
+| [Local CSI mode documentation](docs/local-csi-mode.md) | Details the primary local CSI workflow and why it matters |
+| [Legacy PVC mode documentation](docs/legacy-pvc-mode.md) | Details the RWX PVC compatibility workflow used by the quickstart |
+| [Demo documentation](config/samples/demo/README.md) | Full LLM inference demo with SmolLM2 mounted through CSI |
 
 ## Local Development
 
@@ -717,7 +839,7 @@ Praesto's storage roadmap is centered on the CSI driver.
 - **Scheduling-aware injection**: the mutating webhook should inspect ready `ModelCacheNode` resources and add compatible scheduling constraints so Pods land on nodes that already have the requested cache.
 - **CSI StorageClass support**: the CSI driver should become usable through a Praesto StorageClass, not only inline CSI volumes. The goal is to let users request model-backed volumes with PVCs while Praesto handles local cache placement.
 - **RWX-like model distribution without external RWX storage**: the long-term goal is to provide the practical experience people want from RWX model volumes without requiring a user-managed RWX StorageClass. Praesto would distribute/cache models per node and expose them through CSI.
-- **Node agent integration**: node-local directory creation, permissions, cleanup, disk checks, and cache health should move into a dedicated node agent.
+- **Node agent lifecycle**: the node-agent now prepares per-cache directories; cleanup, disk checks, cache health, and eviction policies remain planned.
 - **Cache lifecycle policies**: configurable retention, eviction, refresh, and cleanup for node-local model data.
 
 ## Contributing

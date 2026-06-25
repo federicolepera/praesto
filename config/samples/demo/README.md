@@ -57,7 +57,10 @@ Success looks like:
 ```text
 Mounted files:
 ...
-Generated text:
+PROMPT:
+In una frase semplice, spiega a cosa serve una cache locale su un nodo Kubernetes.
+
+ANSWER:
 ...
 PRAESTO_LLM_SMOKE_OK
 ```

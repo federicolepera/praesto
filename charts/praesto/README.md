@@ -7,7 +7,17 @@ certificate resources, services, admission webhooks, the CSI node driver, and th
 
 - Kubernetes cluster
 - cert-manager installed when `webhooks.certManager.enabled=true` (default)
-- Praesto CSI node driver enabled for local per-node cache mode, or an RWX-capable StorageClass for the legacy PVC mode
+- For local per-node cache mode, prepare `localCache.basePath` on nodes that should host caches. The default is `/var/praesto`.
+- Praesto CSI node driver and node-agent enabled for local per-node cache mode, or an RWX-capable StorageClass for the legacy PVC mode
+
+The administrator prepares only the base path, for example:
+
+```bash
+sudo mkdir -p /var/praesto
+sudo chmod 0775 /var/praesto
+```
+
+The Praesto node-agent creates per-cache directories below it, such as `/var/praesto/<namespace>/<modelcache>`.
 
 ## Install
 
@@ -33,6 +43,20 @@ The mutating Pod webhook only runs in namespaces labeled with:
 
 ```bash
 kubectl label namespace <namespace> praesto.io/model-cache-injection=enabled
+```
+
+## Selecting cache nodes
+
+To run the node-agent only on selected nodes, label those nodes and set `nodeAgent.nodeSelector`:
+
+```bash
+kubectl label node <node-name> praesto.io/cache-node=true
+```
+
+```yaml
+nodeAgent:
+  nodeSelector:
+    praesto.io/cache-node: "true"
 ```
 
 ## Important values
