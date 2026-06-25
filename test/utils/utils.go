@@ -19,6 +19,7 @@ package utils
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -41,6 +42,15 @@ func warnError(err error) {
 
 // Run executes the provided command within this context
 func Run(cmd *exec.Cmd) (string, error) {
+	return run(cmd)
+}
+
+// RunContext executes the provided command with a context.
+func RunContext(ctx context.Context, cmd *exec.Cmd) (string, error) {
+	return run(exec.CommandContext(ctx, cmd.Path, cmd.Args[1:]...))
+}
+
+func run(cmd *exec.Cmd) (string, error) {
 	dir, _ := GetProjectDir()
 	cmd.Dir = dir
 

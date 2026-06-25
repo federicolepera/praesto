@@ -20,6 +20,7 @@ limitations under the License.
 package e2e
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -114,6 +115,9 @@ metadata:
 	// After all tests have been executed, clean up by undeploying the controller, uninstalling CRDs,
 	// and deleting the namespace.
 	AfterAll(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+
 		By("cleaning up the curl pod for metrics")
 		cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
 		_, _ = utils.Run(cmd)
@@ -124,11 +128,11 @@ metadata:
 
 		By("undeploying the controller-manager")
 		cmd = exec.Command("make", "undeploy")
-		_, _ = utils.Run(cmd)
+		_, _ = utils.RunContext(cleanupCtx, cmd)
 
 		By("uninstalling CRDs")
 		cmd = exec.Command("make", "uninstall")
-		_, _ = utils.Run(cmd)
+		_, _ = utils.RunContext(cleanupCtx, cmd)
 
 		By("removing workload namespace")
 		cmd = exec.Command("kubectl", "delete", "ns", workloadNamespace, "--ignore-not-found", "--wait=false")
