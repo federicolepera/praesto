@@ -197,17 +197,17 @@ Pin release images explicitly:
 helm install praesto ./charts/praesto \
   --namespace praesto-system \
   --create-namespace \
-  --set image.tag=0.1.0 \
-  --set downloader.image.tag=0.1.0 \
-  --set csi.image.tag=0.1.0 \
-  --set nodeAgent.image.tag=0.1.0
+  --set image.tag=0.2.0 \
+  --set downloader.image.tag=0.2.0 \
+  --set csi.image.tag=0.2.0 \
+  --set nodeAgent.image.tag=0.2.0
 ```
 
 The chart can also be published and installed as an OCI Helm package from GHCR:
 
 ```bash
 helm install praesto oci://ghcr.io/federicolepera/praesto/charts/praesto \
-  --version 0.1.0 \
+  --version 0.2.0 \
   --namespace praesto-system \
   --create-namespace
 ```
@@ -234,7 +234,7 @@ This installs the published operator image `ghcr.io/federicolepera/praesto:lates
 For reproducible installs, pin a release tag instead:
 
 ```bash
-make deploy IMG=ghcr.io/federicolepera/praesto:0.1.0
+make deploy IMG=ghcr.io/federicolepera/praesto:0.2.0
 ```
 
 ## Storage modes
@@ -603,10 +603,10 @@ Common chart values:
 | `csi.driverName` | CSI driver name used by injected volumes | `csi.praesto.io` |
 | `localCache.basePath` | Host path where node-local model caches live | `/var/praesto` |
 | `csi.image.repository` | CSI node driver image repository | `ghcr.io/federicolepera/praesto/csi-node-driver` |
-| `csi.image.tag` | CSI node driver image tag | `0.1.0` |
+| `csi.image.tag` | CSI node driver image tag | `0.2.0` |
 | `nodeAgent.enabled` | Install the Praesto node-agent DaemonSet | `true` |
 | `nodeAgent.image.repository` | Node-agent image repository | `ghcr.io/federicolepera/praesto/node-agent` |
-| `nodeAgent.image.tag` | Node-agent image tag | `0.1.0` |
+| `nodeAgent.image.tag` | Node-agent image tag | `0.2.0` |
 | `nodeAgent.nodeSelector` | Restrict node-agent DaemonSet to labeled nodes | `{}` |
 | `webhooks.enabled` | Install admission webhooks | `true` |
 | `webhooks.certManager.enabled` | Create cert-manager issuer/certificate resources | `true` |
@@ -631,7 +631,7 @@ Example:
 ```yaml
 spec:
   downloader:
-    image: ghcr.io/federicolepera/praesto/downloader:0.1.0
+    image: ghcr.io/federicolepera/praesto/downloader:0.2.0
     resources:
       requests:
         cpu: 100m
