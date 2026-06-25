@@ -85,11 +85,13 @@ downloader:
     repository: ghcr.io/federicolepera/praesto/downloader
     tag: "0.1.0"
 
+localCache:
+  basePath: /var/praesto
+
 csi:
   enabled: true
   driverName: csi.praesto.io
   kubeletRootDir: /var/lib/kubelet
-  cacheRoot: /var/praesto
   image:
     repository: ghcr.io/federicolepera/praesto/csi-node-driver
     tag: "0.1.0"

@@ -60,6 +60,7 @@ func main() {
 	var metricsAddr string
 	var metricsCertPath, metricsCertName, metricsCertKey string
 	var webhookCertPath, webhookCertName, webhookCertKey string
+	var localCacheBasePath string
 	var enableLeaderElection bool
 	var probeAddr string
 	var secureMetrics bool
@@ -80,6 +81,8 @@ func main() {
 		"The directory that contains the metrics server certificate.")
 	flag.StringVar(&metricsCertName, "metrics-cert-name", "tls.crt", "The name of the metrics server certificate file.")
 	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
+	flag.StringVar(&localCacheBasePath, "local-cache-base-path", "/var/praesto",
+		"The base path on each node where Praesto local model caches are stored.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	opts := zap.Options{
@@ -204,8 +207,9 @@ func main() {
 		}
 	}
 	if err := (&controller.ModelCacheNodeReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:             mgr.GetClient(),
+		Scheme:             mgr.GetScheme(),
+		LocalCacheBasePath: localCacheBasePath,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ModelCacheNode")
 		os.Exit(1)

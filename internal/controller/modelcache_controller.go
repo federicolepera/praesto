@@ -58,6 +58,7 @@ type ModelCacheReconciler struct {
 // +kubebuilder:rbac:groups=praesto.praesto.io,resources=modelcaches/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=praesto.praesto.io,resources=modelcaches/finalizers,verbs=update
 // +kubebuilder:rbac:groups=praesto.praesto.io,resources=modelcachenodes,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete

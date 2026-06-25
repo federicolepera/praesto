@@ -1,13 +1,13 @@
 # Praesto Helm chart
 
-This chart installs the Praesto operator, CRD, RBAC, cert-manager webhook
-certificate resources, services, and admission webhooks.
+This chart installs the Praesto operator, CRDs, RBAC, cert-manager webhook
+certificate resources, services, admission webhooks, and the CSI node driver.
 
 ## Prerequisites
 
 - Kubernetes cluster
 - cert-manager installed when `webhooks.certManager.enabled=true` (default)
-- RWX-capable StorageClass for `ModelCache` resources
+- Praesto CSI node driver enabled for local per-node cache mode, or an RWX-capable StorageClass for the legacy PVC mode
 
 ## Install
 
@@ -41,6 +41,11 @@ kubectl label namespace <namespace> praesto.io/model-cache-injection=enabled
 | `image.tag` | `0.1.0` | Operator image tag |
 | `downloader.image.repository` | `ghcr.io/federicolepera/praesto/downloader` | Default downloader image documented for users |
 | `downloader.image.tag` | `0.1.0` | Default downloader image tag documented for users |
+| `localCache.basePath` | `/var/praesto` | Host base path where Praesto stores node-local model caches |
+| `csi.enabled` | `true` | Install the Praesto CSI node driver |
+| `csi.driverName` | `csi.praesto.io` | CSI driver name used by injected volumes |
+| `csi.image.repository` | `ghcr.io/federicolepera/praesto/csi-node-driver` | CSI node driver image repository |
+| `csi.image.tag` | `0.1.0` | CSI node driver image tag |
 | `webhooks.enabled` | `true` | Install admission webhooks |
 | `webhooks.certManager.enabled` | `true` | Use cert-manager CA injection and serving cert |
 | `webhooks.mutating.namespaceSelector` | opt-in label | Namespace selector for Pod mutation |

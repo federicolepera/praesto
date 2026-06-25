@@ -415,6 +415,46 @@ func TestEnsureDownloadJobModelCacheNode(t *testing.T) {
 	}
 }
 
+func TestLocalPathForModelCacheNode(t *testing.T) {
+	modelCache := testModelCache()
+	modelCacheNode := testModelCacheNode(modelCache)
+
+	t.Run("uses default base path when empty", func(t *testing.T) {
+		got := LocalPathForModelCacheNode("", modelCacheNode)
+		want := "/var/praesto/default/tinyllama-test"
+		if got != want {
+			t.Fatalf("expected %q, got %q", want, got)
+		}
+	})
+
+	t.Run("uses custom base path", func(t *testing.T) {
+		got := LocalPathForModelCacheNode("/mnt/fast-ssd/praesto/", modelCacheNode)
+		want := "/mnt/fast-ssd/praesto/default/tinyllama-test"
+		if got != want {
+			t.Fatalf("expected %q, got %q", want, got)
+		}
+	})
+}
+
+func TestPersistentVolumeForModelCacheNodeUsesBasePath(t *testing.T) {
+	scheme := newTestScheme(t)
+	modelCache := testModelCache()
+	modelCacheNode := testModelCacheNode(modelCache)
+	pvc := testModelCacheNodePVC(modelCacheNode)
+
+	pv, err := PersistentVolumeForModelCacheNode(scheme, "/mnt/fast-ssd/praesto", modelCacheNode, pvc)
+	if err != nil {
+		t.Fatalf("build ModelCacheNode PV: %v", err)
+	}
+
+	if pv.Spec.Local == nil {
+		t.Fatalf("expected local PV source")
+	}
+	if got, want := pv.Spec.Local.Path, "/mnt/fast-ssd/praesto/default/tinyllama-test"; got != want {
+		t.Fatalf("expected local path %q, got %q", want, got)
+	}
+}
+
 func TestIsDownloadJobComplete(t *testing.T) {
 	t.Run("returns true when Job completed", func(t *testing.T) {
 		complete, err := IsDownloadJobComplete(jobWithCondition(batchv1.JobComplete, corev1.ConditionTrue, "done"))

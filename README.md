@@ -138,6 +138,21 @@ volumes:
 
 This avoids requiring user workloads to mount internal Praesto PVCs directly.
 
+The local cache base path is configurable with Helm:
+
+```yaml
+localCache:
+  basePath: /mnt/fast-ssd/praesto
+```
+
+Praesto will then use paths like:
+
+```text
+/mnt/fast-ssd/praesto/<namespace>/<modelcache>
+```
+
+The base path should point to storage that exists on every node where models may be cached, for example a mounted local SSD. Praesto does not currently create the node-local source directory automatically; this is planned for the node agent.
+
 ### Legacy RWX PVC mode: `storageClassName` set
 
 ```yaml
@@ -488,7 +503,7 @@ Common chart values:
 | `downloader.image.tag` | Default downloader image tag | Chart app version |
 | `csi.enabled` | Install the Praesto CSI node driver | `true` |
 | `csi.driverName` | CSI driver name used by injected volumes | `csi.praesto.io` |
-| `csi.cacheRoot` | Host path where node-local model caches live | `/var/praesto` |
+| `localCache.basePath` | Host path where node-local model caches live | `/var/praesto` |
 | `csi.image.repository` | CSI node driver image repository | `ghcr.io/federicolepera/praesto/csi-node-driver` |
 | `csi.image.tag` | CSI node driver image tag | `0.1.0` |
 | `webhooks.enabled` | Install admission webhooks | `true` |

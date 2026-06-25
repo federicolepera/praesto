@@ -60,6 +60,7 @@ spec:
         - --metrics-bind-address={{ .Values.metrics.bindAddress }}
         {{- end }}
         - --health-probe-bind-address=:8081
+        - --local-cache-base-path={{ .Values.localCache.basePath }}
         {{- if .Values.webhooks.enabled }}
         - --webhook-cert-path=/tmp/k8s-webhook-server/serving-certs
         {{- end }}
