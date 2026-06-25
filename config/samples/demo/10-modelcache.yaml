@@ -1,0 +1,16 @@
+apiVersion: praesto.praesto.io/v1alpha1
+kind: ModelCache
+metadata:
+  name: smollm2-demo
+  namespace: praesto-demo
+spec:
+  source:
+    huggingface:
+      repo: HuggingFaceTB/SmolLM2-135M-Instruct
+      revision: main
+  storage:
+    size: 3Gi
+  # Optional for multi-node demos. If set, add the same selector to
+  # 20-inference-job.yaml under spec.template.spec.nodeSelector.
+  # nodeSelector:
+  #   kubernetes.io/hostname: <node-name>
