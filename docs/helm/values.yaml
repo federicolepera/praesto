@@ -1,0 +1,177 @@
+# Example Praesto Helm values.
+#
+# Use this file as a starting point for:
+#
+#   helm install praesto ./charts/praesto \
+#     --namespace praesto-system \
+#     --create-namespace \
+#     -f docs/helm/values.yaml
+
+# Override generated resource names if needed.
+nameOverride: ""
+fullnameOverride: ""
+
+# Override the namespace used by rendered resources.
+# Leave empty to use the Helm release namespace.
+namespaceOverride: ""
+
+image:
+  # Praesto controller manager image.
+  repository: ghcr.io/federicolepera/praesto
+  # Pin this to a release tag for reproducible installs.
+  tag: "0.2.0"
+  pullPolicy: IfNotPresent
+
+# Use this if your registry requires authentication.
+imagePullSecrets: []
+
+# Controller manager replicas.
+replicaCount: 1
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# Extra annotations/labels for the controller manager Pod.
+podAnnotations: {}
+podLabels: {}
+
+# Controller manager security defaults.
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 128Mi
+  requests:
+    cpu: 10m
+    memory: 64Mi
+
+# Scheduling controls for the controller manager.
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+leaderElection:
+  enabled: true
+
+metrics:
+  enabled: true
+  bindAddress: ":8443"
+  service:
+    port: 8443
+  authProxy:
+    enabled: true
+
+webhooks:
+  # Install mutating and validating webhooks.
+  enabled: true
+  certManager:
+    # Default installation expects cert-manager in the cluster.
+    enabled: true
+    issuer:
+      create: true
+      name: ""
+    certificate:
+      create: true
+      name: ""
+      secretName: webhook-server-cert
+  service:
+    port: 443
+    targetPort: 9443
+  failurePolicy: Fail
+  mutating:
+    # Pod injection is opt-in by namespace.
+    namespaceSelector:
+      matchLabels:
+        praesto.io/model-cache-injection: enabled
+
+rbac:
+  create: true
+  aggregateRoles:
+    create: true
+
+downloader:
+  image:
+    # Image used by downloader Jobs that fetch model artifacts.
+    repository: ghcr.io/federicolepera/praesto/downloader
+    tag: "0.2.0"
+
+localCache:
+  # Host path where Praesto stores node-local model caches.
+  # This path must already exist on nodes where local CSI mode is used.
+  basePath: /var/praesto
+
+csi:
+  # Install the Praesto CSI node driver.
+  enabled: true
+  driverName: csi.praesto.io
+  kubeletRootDir: /var/lib/kubelet
+  image:
+    repository: ghcr.io/federicolepera/praesto/csi-node-driver
+    tag: "0.2.0"
+    pullPolicy: IfNotPresent
+  registrar:
+    image:
+      repository: registry.k8s.io/sig-storage/csi-node-driver-registrar
+      tag: v2.13.0
+      pullPolicy: IfNotPresent
+    resources: {}
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+  podAnnotations: {}
+  podLabels: {}
+  priorityClassName: ""
+  # Restrict the CSI DaemonSet to cache-capable nodes if desired.
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  updateStrategy:
+    type: RollingUpdate
+  resources: {}
+  securityContext:
+    # Required for bind mounts on the node.
+    privileged: true
+    allowPrivilegeEscalation: true
+
+nodeAgent:
+  # Install the Praesto node-agent DaemonSet.
+  # The node-agent prepares per-cache directories under localCache.basePath.
+  enabled: true
+  image:
+    repository: ghcr.io/federicolepera/praesto/node-agent
+    tag: "0.2.0"
+    pullPolicy: IfNotPresent
+  serviceAccount:
+    create: true
+    name: ""
+    annotations: {}
+  podAnnotations: {}
+  podLabels: {}
+  priorityClassName: ""
+  # Example:
+  # nodeSelector:
+  #   praesto.io/cache-node: "true"
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  resources: {}
+  securityContext:
+    privileged: false
+    allowPrivilegeEscalation: false
+    runAsUser: 0
+  updateStrategy:
+    type: RollingUpdate
