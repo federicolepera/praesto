@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/federicolepera/praesto/internal/kubeident"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -29,10 +30,12 @@ const (
 	JobTypeLabelKey   = "praesto.io/job-type"
 )
 
-func PVCNameForModelCache(name string) string { return fmt.Sprintf("praesto-%s", name) }
+func PVCNameForModelCache(name string) string {
+	return kubeident.DNS1123LabelFromRaw(fmt.Sprintf("praesto-%s", name))
+}
 
 func PVNameForModelCacheNode(node string, name string) string {
-	return fmt.Sprintf("praesto-%s-%s", node, name)
+	return kubeident.DNS1123LabelFromRaw(fmt.Sprintf("praesto-%s-%s", node, name))
 }
 
 func LocalPathForModelCacheNode(basePath string, modelCacheNode *praestov1alpha1.ModelCacheNode) string {
@@ -42,13 +45,17 @@ func LocalPathForModelCacheNode(basePath string, modelCacheNode *praestov1alpha1
 	return fmt.Sprintf("%s/%s/%s", strings.TrimRight(basePath, "/"), modelCacheNode.Spec.ModelCacheRef.Namespace, modelCacheNode.Spec.ModelCacheRef.Name)
 }
 
-func JobNameForModelCache(name string) string { return fmt.Sprintf("praesto-download-%s", name) }
+func JobNameForModelCache(name string) string {
+	return kubeident.DNS1123LabelFromRaw(fmt.Sprintf("praesto-download-%s", name))
+}
 
-func JobNameForModelCacheNode(name string) string { return fmt.Sprintf("praesto-download-%s", name) }
+func JobNameForModelCacheNode(name string) string {
+	return kubeident.DNS1123LabelFromRaw(fmt.Sprintf("praesto-download-%s", name))
+}
 
 func ModelCacheLabels(name string) map[string]string {
 	return map[string]string{
-		ModelLabelKey:   name,
+		ModelLabelKey:   kubeident.LabelValue(name),
 		ManagedLabelKey: ManagedLabelValue,
 	}
 }
@@ -195,7 +202,7 @@ func PersistentVolumeClaimForModelCacheNode(scheme *runtime.Scheme, modelCacheNo
 func validateModelCacheNodePVC(pvc *corev1.PersistentVolumeClaim, modelCacheNode *praestov1alpha1.ModelCacheNode) error {
 	labels := pvc.GetLabels()
 	expectedPVCName := PVNameForModelCacheNode(modelCacheNode.Spec.NodeName, modelCacheNode.Name)
-	if labels[ManagedLabelKey] != ManagedLabelValue || labels[ModelLabelKey] != modelCacheNode.Name || pvc.Name != expectedPVCName {
+	if labels[ManagedLabelKey] != ManagedLabelValue || labels[ModelLabelKey] != kubeident.LabelValue(modelCacheNode.Name) || pvc.Name != expectedPVCName {
 		return fmt.Errorf(
 			"PVC %s/%s already exists but is not managed by praesto for ModelCacheNode %s/%s; expected name %s and labels %s=true and %s=%s",
 			pvc.Namespace,
@@ -228,7 +235,7 @@ func GetManagedModelCachePVC(ctx context.Context, reader client.Reader, modelCac
 func validateModelCacheNodePV(pv *corev1.PersistentVolume, modelCacheNode *praestov1alpha1.ModelCacheNode) error {
 	labels := pv.GetLabels()
 	expectedPVName := PVNameForModelCacheNode(modelCacheNode.Spec.NodeName, modelCacheNode.Name)
-	if labels[ManagedLabelKey] != ManagedLabelValue || labels[ModelLabelKey] != modelCacheNode.Name || pv.Name != expectedPVName {
+	if labels[ManagedLabelKey] != ManagedLabelValue || labels[ModelLabelKey] != kubeident.LabelValue(modelCacheNode.Name) || pv.Name != expectedPVName {
 		return fmt.Errorf(
 			"PV %s already exists but is not managed by praesto for ModelCacheNode %s/%s; expected name %s and labels %s=true and %s=%s",
 			pv.Name,
@@ -246,7 +253,7 @@ func validateModelCacheNodePV(pv *corev1.PersistentVolume, modelCacheNode *praes
 
 func validateManagedPVC(pvc *corev1.PersistentVolumeClaim, modelCache *praestov1alpha1.ModelCache) error {
 	labels := pvc.GetLabels()
-	if labels[ManagedLabelKey] != ManagedLabelValue || labels[ModelLabelKey] != modelCache.Name {
+	if labels[ManagedLabelKey] != ManagedLabelValue || labels[ModelLabelKey] != kubeident.LabelValue(modelCache.Name) {
 		return fmt.Errorf(
 			"PVC %s/%s already exists but is not managed by praesto for ModelCache %s/%s; expected labels %s=true and %s=%s",
 			pvc.Namespace,

@@ -228,6 +228,24 @@ func TestDownloadJobForModelCacheNode(t *testing.T) {
 	}
 }
 
+func TestGeneratedIdentifiersFitKubernetesLabelLimits(t *testing.T) {
+	longName := "model-" + strings.Repeat("segment-", 20)
+	longNode := "node." + strings.Repeat("segment.", 20)
+
+	for label, name := range map[string]string{
+		"pvc":            PVCNameForModelCache(longName),
+		"pv":             PVNameForModelCacheNode(longNode, longName),
+		"legacy job":     JobNameForModelCache(longName),
+		"per-node job":   JobNameForModelCacheNode(longName),
+		"model label":    ModelCacheLabels(longName)[ModelLabelKey],
+		"download label": DownloadJobLabels(longName)[ModelLabelKey],
+	} {
+		if len(name) > 63 {
+			t.Fatalf("%s identifier is too long: %d %s", label, len(name), name)
+		}
+	}
+}
+
 func TestDownloadJobForModelCacheWithOptionalContainerSecurityContext(t *testing.T) {
 	modelCache := testModelCache()
 	allowPrivilegeEscalation := false

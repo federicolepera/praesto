@@ -21,6 +21,7 @@ import (
 	"fmt"
 
 	"github.com/federicolepera/praesto/internal/downloader"
+	"github.com/federicolepera/praesto/internal/kubeident"
 	"github.com/federicolepera/praesto/internal/status"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -315,8 +316,8 @@ var _ = Describe("ModelCache Controller", func() {
 		Expect(createdNode.Spec.ModelCacheRef.Name).To(Equal(localModelCacheName))
 		Expect(createdNode.Spec.ModelCacheRef.UID).To(Equal(string(mc.UID)))
 		Expect(createdNode.Spec.NodeName).To(Equal(nodeName))
-		Expect(createdNode.Labels).To(HaveKeyWithValue(modelCacheNodeModelNamespaceLabel, namespace))
-		Expect(createdNode.Labels).To(HaveKeyWithValue(modelCacheNodeModelNameLabel, localModelCacheName))
+		Expect(createdNode.Labels).To(HaveKeyWithValue(modelCacheNodeModelNamespaceLabel, kubeident.LabelValue(namespace)))
+		Expect(createdNode.Labels).To(HaveKeyWithValue(modelCacheNodeModelNameLabel, kubeident.LabelValue(localModelCacheName)))
 
 		Expect(k8sClient.Get(ctx, localModelCacheKey, mc)).To(Succeed())
 		Expect(mc.Status.TotalNodes).To(Equal(int32(1)))

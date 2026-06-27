@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/federicolepera/praesto/internal/downloader"
+	"github.com/federicolepera/praesto/internal/kubeident"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
@@ -323,9 +324,9 @@ func (r *ModelCacheReconciler) reconcileModelCacheDelete(ctx context.Context, mo
 func (r *ModelCacheReconciler) listModelCacheNodesForModelCache(ctx context.Context, modelCache *praestov1alpha1.ModelCache) (*praestov1alpha1.ModelCacheNodeList, error) {
 	modelCacheNodes := &praestov1alpha1.ModelCacheNodeList{}
 	labels := client.MatchingLabels{
-		modelCacheNodeModelNamespaceLabel: modelCache.Namespace,
-		modelCacheNodeModelNameLabel:      modelCache.Name,
-		modelCacheNodeModelUIDLabel:       string(modelCache.UID),
+		modelCacheNodeModelNamespaceLabel: kubeident.LabelValue(modelCache.Namespace),
+		modelCacheNodeModelNameLabel:      kubeident.LabelValue(modelCache.Name),
+		modelCacheNodeModelUIDLabel:       kubeident.LabelValue(string(modelCache.UID)),
 	}
 	if err := r.List(ctx, modelCacheNodes, labels); err != nil {
 		return nil, err
@@ -359,10 +360,10 @@ func desiredModelCacheNode(modelCache *praestov1alpha1.ModelCache, nodeName stri
 		ObjectMeta: metav1.ObjectMeta{
 			Name: modelCacheNodeName(modelCache, nodeName),
 			Labels: map[string]string{
-				modelCacheNodeModelNamespaceLabel: modelCache.Namespace,
-				modelCacheNodeModelNameLabel:      modelCache.Name,
-				modelCacheNodeModelUIDLabel:       string(modelCache.UID),
-				modelCacheNodeNodeLabel:           nodeName,
+				modelCacheNodeModelNamespaceLabel: kubeident.LabelValue(modelCache.Namespace),
+				modelCacheNodeModelNameLabel:      kubeident.LabelValue(modelCache.Name),
+				modelCacheNodeModelUIDLabel:       kubeident.LabelValue(string(modelCache.UID)),
+				modelCacheNodeNodeLabel:           kubeident.LabelValue(nodeName),
 			},
 		},
 		Spec: praestov1alpha1.ModelCacheNodeSpec{
@@ -381,7 +382,7 @@ func desiredModelCacheNode(modelCache *praestov1alpha1.ModelCache, nodeName stri
 }
 
 func modelCacheNodeName(modelCache *praestov1alpha1.ModelCache, nodeName string) string {
-	return fmt.Sprintf("%s-%s-%s", modelCache.Namespace, modelCache.Name, nodeName)
+	return kubeident.DNS1123LabelFromRaw(fmt.Sprintf("%s-%s-%s", modelCache.Namespace, modelCache.Name, nodeName))
 }
 
 func (r *ModelCacheReconciler) updateModelCacheStatusFromNodes(ctx context.Context, modelCache *praestov1alpha1.ModelCache, modelCacheNodes []praestov1alpha1.ModelCacheNode) error {
