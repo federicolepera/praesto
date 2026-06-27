@@ -19,7 +19,7 @@ image:
   # Praesto controller manager image.
   repository: ghcr.io/federicolepera/praesto
   # Pin this to a release tag for reproducible installs.
-  tag: "0.2.0"
+  tag: "0.3.1"
   pullPolicy: IfNotPresent
 
 # Use this if your registry requires authentication.
@@ -106,7 +106,7 @@ downloader:
   image:
     # Image used by downloader Jobs that fetch model artifacts.
     repository: ghcr.io/federicolepera/praesto/downloader
-    tag: "0.2.0"
+    tag: "0.3.1"
 
 localCache:
   # Host path where Praesto stores node-local model caches.
@@ -120,7 +120,7 @@ csi:
   kubeletRootDir: /var/lib/kubelet
   image:
     repository: ghcr.io/federicolepera/praesto/csi-node-driver
-    tag: "0.2.0"
+    tag: "0.3.1"
     pullPolicy: IfNotPresent
   registrar:
     image:
@@ -153,7 +153,7 @@ nodeAgent:
   enabled: true
   image:
     repository: ghcr.io/federicolepera/praesto/node-agent
-    tag: "0.2.0"
+    tag: "0.3.1"
     pullPolicy: IfNotPresent
   serviceAccount:
     create: true
