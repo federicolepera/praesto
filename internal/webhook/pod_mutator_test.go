@@ -108,6 +108,106 @@ func TestPodMutatorHandle(t *testing.T) {
 		assertAppContainerMount(t, mutatedPod, DefaultModelMountPath)
 	})
 
+	t.Run("mounts multiple local ready model caches as CSI volumes", func(t *testing.T) {
+		mutator := newTestPodMutator(t, scheme,
+			namedReadyModelCache("resnet-v1"),
+			namedReadyModelCache("resnet-v2"),
+			namedReadyModelCache("yolov8-v1"),
+		)
+		pod := podWithContainers("openvino")
+		pod.Annotations = map[string]string{
+			ModelMountsAnnotationKey: `[
+				{"modelCache":"resnet-v1","mountPath":"/models/resnet/1"},
+				{"modelCache":"resnet-v2","mountPath":"/models/resnet/2"},
+				{"modelCache":"yolov8-v1","mountPath":"/models/yolov8/1"}
+			]`,
+		}
+
+		resp, mutatedPod := handlePod(t, mutator, pod)
+
+		assertAllowed(t, resp)
+		assertModelCSIVolumeNamed(t, mutatedPod, "praesto-model-cache-0", "default", "resnet-v1")
+		assertModelCSIVolumeNamed(t, mutatedPod, "praesto-model-cache-1", "default", "resnet-v2")
+		assertModelCSIVolumeNamed(t, mutatedPod, "praesto-model-cache-2", "default", "yolov8-v1")
+		assertContainerMountNamed(t, mutatedPod, "openvino", "praesto-model-cache-0", "/models/resnet/1")
+		assertContainerMountNamed(t, mutatedPod, "openvino", "praesto-model-cache-1", "/models/resnet/2")
+		assertContainerMountNamed(t, mutatedPod, "openvino", "praesto-model-cache-2", "/models/yolov8/1")
+	})
+
+	t.Run("mounts multiple legacy model caches as PVC volumes", func(t *testing.T) {
+		mutator := newTestPodMutator(t, scheme,
+			namedLegacyReadyModelCache("bert-v1", "praesto-bert-v1"),
+			namedLegacyReadyModelCache("bert-v2", "praesto-bert-v2"),
+		)
+		pod := podWithContainers("openvino")
+		pod.Annotations = map[string]string{
+			ModelMountsAnnotationKey: `[
+				{"modelCache":"bert-v1","mountPath":"/models/bert/1"},
+				{"modelCache":"bert-v2","mountPath":"/models/bert/2"}
+			]`,
+		}
+
+		resp, mutatedPod := handlePod(t, mutator, pod)
+
+		assertAllowed(t, resp)
+		assertModelPVCVolumeNamed(t, mutatedPod, "praesto-model-cache-0", "praesto-bert-v1")
+		assertModelPVCVolumeNamed(t, mutatedPod, "praesto-model-cache-1", "praesto-bert-v2")
+		assertContainerMountNamed(t, mutatedPod, "openvino", "praesto-model-cache-0", "/models/bert/1")
+		assertContainerMountNamed(t, mutatedPod, "openvino", "praesto-model-cache-1", "/models/bert/2")
+	})
+
+	t.Run("rejects single and multi model annotations together", func(t *testing.T) {
+		mutator := newTestPodMutator(t, scheme, readyModelCache())
+		pod := annotatedPod(podWithContainers("app"))
+		pod.Annotations[ModelMountsAnnotationKey] = `[{"modelCache":"tinyllama-test","mountPath":"/models/tinyllama/1"}]`
+
+		resp, _ := handlePod(t, mutator, pod)
+
+		assertRejected(t, resp, "cannot be used together")
+	})
+
+	t.Run("rejects invalid multi model mount path", func(t *testing.T) {
+		mutator := newTestPodMutator(t, scheme, namedReadyModelCache("resnet-v1"))
+		pod := podWithContainers("openvino")
+		pod.Annotations = map[string]string{
+			ModelMountsAnnotationKey: `[{"modelCache":"resnet-v1","mountPath":"models/resnet/1"}]`,
+		}
+
+		resp, _ := handlePod(t, mutator, pod)
+
+		assertRejected(t, resp, "mountPath must be absolute")
+	})
+
+	t.Run("rejects duplicate multi model mount paths", func(t *testing.T) {
+		mutator := newTestPodMutator(t, scheme, namedReadyModelCache("resnet-v1"), namedReadyModelCache("bert-v1"))
+		pod := podWithContainers("openvino")
+		pod.Annotations = map[string]string{
+			ModelMountsAnnotationKey: `[
+				{"modelCache":"resnet-v1","mountPath":"/models/shared/1"},
+				{"modelCache":"bert-v1","mountPath":"/models/shared/1"}
+			]`,
+		}
+
+		resp, _ := handlePod(t, mutator, pod)
+
+		assertRejected(t, resp, "duplicate mountPath")
+	})
+
+	t.Run("rejects overlapping multi model mount paths", func(t *testing.T) {
+		mutator := newTestPodMutator(t, scheme, namedReadyModelCache("resnet-v1"), namedReadyModelCache("bert-v1"))
+		pod := podWithContainers("openvino")
+		pod.Annotations = map[string]string{
+			ModelMountsAnnotationKey: `[
+				{"modelCache":"resnet-v1","mountPath":"/models/resnet"},
+				{"modelCache":"bert-v1","mountPath":"/models/resnet/1"}
+			]`,
+		}
+
+		resp, _ := handlePod(t, mutator, pod)
+
+		assertRejected(t, resp, "overlapping mountPaths")
+	})
+
 	t.Run("uses custom mount path", func(t *testing.T) {
 		mutator := newTestPodMutator(t, scheme, readyModelCache())
 		pod := annotatedPod(podWithContainers("app"))
@@ -269,8 +369,20 @@ func readyModelCache() *praestov1alpha1.ModelCache {
 	return modelCacheWithStatus(praestov1alpha1.ModelCachePhaseReady, "")
 }
 
+func namedReadyModelCache(name string) *praestov1alpha1.ModelCache {
+	modelCache := modelCacheWithStatus(praestov1alpha1.ModelCachePhaseReady, "")
+	modelCache.Name = name
+	return modelCache
+}
+
 func legacyReadyModelCache() *praestov1alpha1.ModelCache {
 	return legacyModelCacheWithStatus(praestov1alpha1.ModelCachePhaseReady, "praesto-tinyllama")
+}
+
+func namedLegacyReadyModelCache(name, pvcName string) *praestov1alpha1.ModelCache {
+	modelCache := legacyModelCacheWithStatus(praestov1alpha1.ModelCachePhaseReady, pvcName)
+	modelCache.Name = name
+	return modelCache
 }
 
 func modelCacheWithStatus(phase, pvcName string) *praestov1alpha1.ModelCache {
@@ -368,9 +480,13 @@ func assertRejected(t *testing.T, resp admission.Response, expectedMessage strin
 }
 
 func assertModelPVCVolume(t *testing.T, pod *corev1.Pod, pvcName string) {
+	assertModelPVCVolumeNamed(t, pod, testModelCacheVolumeName, pvcName)
+}
+
+func assertModelPVCVolumeNamed(t *testing.T, pod *corev1.Pod, volumeName, pvcName string) {
 	t.Helper()
 	for _, volume := range pod.Spec.Volumes {
-		if volume.Name != testModelCacheVolumeName {
+		if volume.Name != volumeName {
 			continue
 		}
 		if volume.PersistentVolumeClaim == nil {
@@ -381,13 +497,17 @@ func assertModelPVCVolume(t *testing.T, pod *corev1.Pod, pvcName string) {
 		}
 		return
 	}
-	t.Fatalf("expected model cache volume")
+	t.Fatalf("expected model cache volume %s", volumeName)
 }
 
 func assertModelCSIVolume(t *testing.T, pod *corev1.Pod, namespace, name string) {
+	assertModelCSIVolumeNamed(t, pod, testModelCacheVolumeName, namespace, name)
+}
+
+func assertModelCSIVolumeNamed(t *testing.T, pod *corev1.Pod, volumeName, namespace, name string) {
 	t.Helper()
 	for _, volume := range pod.Spec.Volumes {
-		if volume.Name != testModelCacheVolumeName {
+		if volume.Name != volumeName {
 			continue
 		}
 		if volume.CSI == nil {
@@ -401,19 +521,22 @@ func assertModelCSIVolume(t *testing.T, pod *corev1.Pod, namespace, name string)
 		}
 		return
 	}
-	t.Fatalf("expected model cache CSI volume")
+	t.Fatalf("expected model cache CSI volume %s", volumeName)
 }
 
 func assertAppContainerMount(t *testing.T, pod *corev1.Pod, mountPath string) {
+	assertContainerMountNamed(t, pod, "app", testModelCacheVolumeName, mountPath)
+}
+
+func assertContainerMountNamed(t *testing.T, pod *corev1.Pod, containerName, volumeName, mountPath string) {
 	t.Helper()
-	const containerName = "app"
 	container := findContainer(t, pod, containerName)
 	for _, mount := range container.VolumeMounts {
-		if mount.Name == testModelCacheVolumeName && mount.MountPath == mountPath && mount.ReadOnly {
+		if mount.Name == volumeName && mount.MountPath == mountPath && mount.ReadOnly {
 			return
 		}
 	}
-	t.Fatalf("expected container %s to mount model cache at %s, got %#v", containerName, mountPath, container.VolumeMounts)
+	t.Fatalf("expected container %s to mount volume %s at %s, got %#v", containerName, volumeName, mountPath, container.VolumeMounts)
 }
 
 func assertContainerHasNoMount(t *testing.T, pod *corev1.Pod, containerName string) {
