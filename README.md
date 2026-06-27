@@ -157,7 +157,7 @@ See the [storage modes documentation](docs/STORAGE_MODES.md) for examples and de
 
 ## Demo
 
-Praesto includes a CSI-based LLM demo: it downloads a small model, mounts it through the CSI driver, and runs a CPU inference Job from the mounted path.
+Praesto includes an OpenVINO Model Server demo: it downloads two OpenVINO-ready models, mounts both into one Pod through the CSI driver, and serves them from a single model server.
 
 See the [demo documentation](docs/DEMO.md).
 
@@ -181,20 +181,30 @@ kubectl label namespace <namespace> praesto.io/model-cache-injection=enabled
 
 Namespaces without this label are ignored by the mutating webhook. This keeps unrelated workloads from depending on Praesto webhook availability.
 
-Required annotation:
+Recommended annotation:
 
 ```yaml
-praesto.io/model-cache: tinyllama-test
+praesto.io/model-mounts: |
+  [
+    {"modelCache":"ovms-distilbert-squad","mountPath":"/models/distilbert/1"},
+    {"modelCache":"ovms-vit-food101","mountPath":"/models/vit/1"}
+  ]
 ```
 
 Optional annotations:
 
 ```yaml
-praesto.io/model-mount-path: /models
-praesto.io/target-container: app
+praesto.io/target-container: ovms
 ```
 
-If the mount path is omitted, Praesto uses `/models`. If the target container is omitted, Praesto mounts the cache into the first container in the Pod spec.
+If the target container is omitted, Praesto mounts the cache into the first container in the Pod spec.
+
+The older single-model annotations are still supported for compatibility, but `praesto.io/model-mounts` is the preferred form:
+
+```yaml
+praesto.io/model-cache: tinyllama-test
+praesto.io/model-mount-path: /models
+```
 
 The webhook:
 

@@ -1,0 +1,25 @@
+apiVersion: praesto.praesto.io/v1alpha1
+kind: ModelCache
+metadata:
+  name: ovms-distilbert-squad
+  namespace: praesto-ovms
+spec:
+  source:
+    huggingface:
+      repo: echarlaix/distilbert-base-uncased-distilled-squad-openvino-8bit
+      revision: main
+  storage:
+    size: 1Gi
+---
+apiVersion: praesto.praesto.io/v1alpha1
+kind: ModelCache
+metadata:
+  name: ovms-vit-food101
+  namespace: praesto-ovms
+spec:
+  source:
+    huggingface:
+      repo: echarlaix/vit-food101-int8
+      revision: main
+  storage:
+    size: 1Gi
