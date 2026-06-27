@@ -25,16 +25,16 @@ The Praesto node-agent creates per-cache directories below it, such as `/var/pra
 helm install praesto ./charts/praesto --namespace praesto-system --create-namespace
 ```
 
-Pin release images explicitly for v0.2.0:
+Pin release images explicitly for v0.3.0:
 
 ```bash
 helm install praesto ./charts/praesto \
   --namespace praesto-system \
   --create-namespace \
-  --set image.tag=0.2.0 \
-  --set downloader.image.tag=0.2.0 \
-  --set csi.image.tag=0.2.0 \
-  --set nodeAgent.image.tag=0.2.0
+  --set image.tag=0.3.0 \
+  --set downloader.image.tag=0.3.0 \
+  --set csi.image.tag=0.3.0 \
+  --set nodeAgent.image.tag=0.3.0
 ```
 
 ## Pod injection opt-in
@@ -64,17 +64,17 @@ nodeAgent:
 | Value | Default | Description |
 |-------|---------|-------------|
 | `image.repository` | `ghcr.io/federicolepera/praesto` | Operator image repository |
-| `image.tag` | `0.2.0` | Operator image tag |
+| `image.tag` | `0.3.0` | Operator image tag |
 | `downloader.image.repository` | `ghcr.io/federicolepera/praesto/downloader` | Default downloader image documented for users |
-| `downloader.image.tag` | `0.2.0` | Default downloader image tag documented for users |
+| `downloader.image.tag` | `0.3.0` | Default downloader image tag documented for users |
 | `localCache.basePath` | `/var/praesto` | Host base path where Praesto stores node-local model caches |
 | `csi.enabled` | `true` | Install the Praesto CSI node driver |
 | `csi.driverName` | `csi.praesto.io` | CSI driver name used by injected volumes |
 | `csi.image.repository` | `ghcr.io/federicolepera/praesto/csi-node-driver` | CSI node driver image repository |
-| `csi.image.tag` | `0.2.0` | CSI node driver image tag |
+| `csi.image.tag` | `0.3.0` | CSI node driver image tag |
 | `nodeAgent.enabled` | `true` | Install the Praesto node-agent DaemonSet |
 | `nodeAgent.image.repository` | `ghcr.io/federicolepera/praesto/node-agent` | Node-agent image repository |
-| `nodeAgent.image.tag` | `0.2.0` | Node-agent image tag |
+| `nodeAgent.image.tag` | `0.3.0` | Node-agent image tag |
 | `nodeAgent.nodeSelector` | `{}` | Node selector used to schedule the node-agent DaemonSet |
 | `webhooks.enabled` | `true` | Install admission webhooks |
 | `webhooks.certManager.enabled` | `true` | Use cert-manager CA injection and serving cert |

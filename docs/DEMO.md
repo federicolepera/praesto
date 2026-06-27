@@ -1,8 +1,32 @@
-# Praesto CSI LLM demo
+# Praesto OpenVINO Model Server demo
 
-This demo shows the Praesto local CSI flow with a real LLM workload.
+This is the main Praesto demo.
 
-Praesto downloads `HuggingFaceTB/SmolLM2-135M-Instruct` into the node-local cache, exposes it through the CSI driver, and a Kubernetes `Job` loads the model from `/model` to run one CPU inference.
+It shows the local CSI flow with a real model server: Praesto downloads two OpenVINO-ready Hugging Face models, mounts both into one Pod through CSI, and OpenVINO Model Server serves them from the `/models` directory.
+
+The demo uses the new compact multi-mount annotation:
+
+```yaml
+praesto.io/model-mounts: |
+  [
+    {"modelCache":"ovms-distilbert-squad","mountPath":"/models/distilbert/1"},
+    {"modelCache":"ovms-vit-food101","mountPath":"/models/vit/1"}
+  ]
+```
+
+Inside the OpenVINO container, the mounted layout becomes:
+
+```text
+/models/
+  distilbert/
+    1/
+      openvino_model.xml
+      openvino_model.bin
+  vit/
+    1/
+      openvino_model.xml
+      openvino_model.bin
+```
 
 ## Prerequisites
 
@@ -21,62 +45,65 @@ sudo chmod 0775 /var/praesto
 
 ## Run the demo
 
-Apply the namespace, `ModelCache`, and demo manifests:
+Apply the OpenVINO demo manifests:
 
 ```bash
-kubectl apply -k config/samples/demo
+kubectl apply -k config/samples/demo/openvino
 ```
 
-Wait for the model cache:
+Wait for both model caches:
 
 ```bash
-kubectl wait -n praesto-demo --for=condition=Ready modelcache/smollm2-demo --timeout=45m
-kubectl get modelcache -n praesto-demo smollm2-demo -o wide
-kubectl get modelcachenode -l praesto.io/model-cache-namespace=praesto-demo,praesto.io/model-cache-name=smollm2-demo
+kubectl wait -n praesto-ovms --for=condition=Ready modelcache/ovms-distilbert-squad --timeout=10m
+kubectl wait -n praesto-ovms --for=condition=Ready modelcache/ovms-vit-food101 --timeout=10m
 ```
 
-Launch the inference Job:
+Wait for OpenVINO Model Server:
 
 ```bash
-kubectl apply -f config/samples/demo/20-inference-job.yaml
-kubectl wait -n praesto-demo --for=condition=Complete job/smollm2-inference --timeout=20m
-kubectl logs -n praesto-demo job/smollm2-inference
+kubectl rollout status -n praesto-ovms deployment/openvino-model-server --timeout=5m
 ```
 
-Success looks like:
+## Verify
+
+Check that OpenVINO loaded both models:
+
+```bash
+kubectl logs -n praesto-ovms deploy/openvino-model-server
+```
+
+Expected log lines include:
 
 ```text
-Mounted files:
-...
-PROMPT:
-In una frase semplice, spiega a cosa serve una cache locale su un nodo Kubernetes.
-
-ANSWER:
-...
-PRAESTO_LLM_SMOKE_OK
+Loaded model distilbert; version: 1
+Loaded model vit; version: 1
 ```
 
-The generated text does not need to be deterministic. The marker means the model was loaded from the Praesto CSI mount and inference completed.
+Query metadata through the REST API:
 
-## Multi-node note
+```bash
+kubectl exec -n praesto-ovms deploy/openvino-model-server -- \
+  sh -c 'curl -s http://127.0.0.1:8000/v1/models/distilbert/metadata'
 
-Scheduling-aware injection is still on the roadmap. On a multi-node cluster, make sure the inference Pod lands on a node where the `ModelCacheNode` is ready.
-
-You can constrain the demo by editing `config/samples/demo/10-modelcache.yaml`:
-
-```yaml
-spec:
-  nodeSelector:
-    kubernetes.io/hostname: <node-name>
+kubectl exec -n praesto-ovms deploy/openvino-model-server -- \
+  sh -c 'curl -s http://127.0.0.1:8000/v1/models/vit/metadata'
 ```
 
-Then add the same selector to `config/samples/demo/20-inference-job.yaml` under `spec.template.spec.nodeSelector`.
+Both endpoints should return model metadata.
+
+## Why this demo matters
+
+The demo shows Praesto doing more than mounting one folder:
+
+- multiple `ModelCache` resources are prepared independently;
+- the webhook injects multiple CSI volumes into one Pod;
+- each model lands in the layout expected by OpenVINO Model Server;
+- the application container only sees `/models`, not Praesto's node-local cache path.
 
 ## Cleanup
 
 ```bash
-kubectl delete -f config/samples/demo/20-inference-job.yaml --ignore-not-found
-kubectl delete -k config/samples/demo --ignore-not-found
+kubectl delete -k config/samples/demo/openvino --ignore-not-found
 ```
 
-The local PV uses `Retain`, so node files under `/var/praesto/praesto-demo/smollm2-demo` may remain and can be removed manually if desired.
+The local PVs use `Retain`, so node files under `/var/praesto/praesto-ovms/` may remain and can be removed manually if desired.
