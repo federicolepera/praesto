@@ -208,7 +208,7 @@ func cleanMountPath(mountPath string) (string, error) {
 	}
 	for _, segment := range strings.Split(mountPath, "/") {
 		if segment == ".." {
-			return "", fmt.Errorf("mountPath must not contain ..")
+			return "", fmt.Errorf("mountPath must not contain parent directory segments")
 		}
 	}
 	cleaned := path.Clean(mountPath)
