@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: openvino-model-server-config
+  namespace: praesto-ovms
+data:
+  config.json: |
+    {
+      "model_config_list": [
+        {
+          "config": {
+            "name": "distilbert",
+            "base_path": "/models/distilbert",
+            "model_version_policy": {"all": {}}
+          }
+        },
+        {
+          "config": {
+            "name": "vit",
+            "base_path": "/models/vit",
+            "model_version_policy": {"all": {}}
+          }
+        }
+      ]
+    }

@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openvino-model-server
+  namespace: praesto-ovms
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openvino-model-server
+  template:
+    metadata:
+      labels:
+        app: openvino-model-server
+      annotations:
+        praesto.io/target-container: ovms
+        praesto.io/model-mounts: |
+          [
+            {"modelCache":"ovms-distilbert-squad","mountPath":"/models/distilbert/1"},
+            {"modelCache":"ovms-vit-food101","mountPath":"/models/vit/1"}
+          ]
+    spec:
+      containers:
+        - name: ovms
+          image: openvino/model_server:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - --config_path
+            - /config/config.json
+            - --port
+            - "9000"
+            - --rest_port
+            - "8000"
+          ports:
+            - name: grpc
+              containerPort: 9000
+            - name: http
+              containerPort: 8000
+          volumeMounts:
+            - name: ovms-config
+              mountPath: /config
+              readOnly: true
+      volumes:
+        - name: ovms-config
+          configMap:
+            name: openvino-model-server-config
