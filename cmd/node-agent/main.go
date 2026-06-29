@@ -10,6 +10,7 @@ import (
 
 	praestov1alpha1 "github.com/federicolepera/praesto/api/v1alpha1"
 	"github.com/federicolepera/praesto/internal/downloader"
+	"github.com/federicolepera/praesto/internal/modeldownload"
 	"github.com/federicolepera/praesto/internal/nodeagent"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -74,6 +75,9 @@ func main() {
 		NodeName:  nodeName,
 		CacheRoot: cacheRoot,
 		DirMode:   parsedMode,
+		Downloader: &modeldownload.Router{
+			HuggingFace: &modeldownload.HuggingFaceDownloader{},
+		},
 	}).SetupWithManager(mgr); err != nil {
 		fmt.Fprintf(os.Stderr, "unable to create node-agent controller: %v\n", err)
 		os.Exit(1)
