@@ -86,11 +86,17 @@ metadata:
     {{- include "praesto.labels" . | nindent 4 }}
 rules:
 - apiGroups: ["praesto.praesto.io"]
-  resources: ["modelcachenodes"]
+  resources: ["modelcachenodes", "modelcaches"]
   verbs: ["get", "list", "watch"]
+- apiGroups: ["praesto.praesto.io"]
+  resources: ["modelcachenodes"]
+  verbs: ["patch", "update"]
 - apiGroups: ["praesto.praesto.io"]
   resources: ["modelcachenodes/status"]
   verbs: ["get", "patch", "update"]
+- apiGroups: ["praesto.praesto.io"]
+  resources: ["modelcachenodes/finalizers"]
+  verbs: ["patch", "update"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

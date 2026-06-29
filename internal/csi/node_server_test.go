@@ -2,6 +2,7 @@ package csi
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -100,6 +101,27 @@ func TestNodePublishVolumeReturnsNotFoundForMissingSourcePath(t *testing.T) {
 
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("expected NotFound error, got %v", err)
+	}
+}
+
+func TestNodePublishVolumeRequiresCompleteMarker(t *testing.T) {
+	cacheRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cacheRoot, "default", "tinyllama-test"), 0o755); err != nil {
+		t.Fatalf("create source path: %v", err)
+	}
+	driver := NewDriver(Config{CacheRoot: cacheRoot})
+	server := &nodeServer{driver: driver}
+
+	_, err := server.NodePublishVolume(context.Background(), &csipb.NodePublishVolumeRequest{
+		TargetPath: filepath.Join(t.TempDir(), "target"),
+		VolumeContext: map[string]string{
+			volumeAttributeModelCacheNamespace: "default",
+			volumeAttributeModelCacheName:      "tinyllama-test",
+		},
+	})
+
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition error, got %v", err)
 	}
 }
 

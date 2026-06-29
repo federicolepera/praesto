@@ -54,6 +54,13 @@ func (s *nodeServer) NodePublishVolume(ctx context.Context, req *csipb.NodePubli
 	if !exists {
 		return nil, status.Error(codes.NotFound, fmt.Sprintf("model cache source path %q does not exist", sourcePath))
 	}
+	complete, err := cacheComplete(sourcePath)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "check model cache complete marker in %q: %v", sourcePath, err)
+	}
+	if !complete {
+		return nil, status.Error(codes.FailedPrecondition, fmt.Sprintf("model cache source path %q is not ready: missing %s", sourcePath, completeFileName))
+	}
 
 	if err := bindMount(sourcePath, targetPath, req.GetReadonly()); err != nil {
 		return nil, status.Errorf(codes.Internal, "publish model cache volume from %q to %q: %v", sourcePath, targetPath, err)

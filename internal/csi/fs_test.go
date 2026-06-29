@@ -44,3 +44,26 @@ func TestDirectoryExistsForFile(t *testing.T) {
 		t.Fatalf("expected file path to not count as directory")
 	}
 }
+
+func TestCacheComplete(t *testing.T) {
+	dir := t.TempDir()
+
+	complete, err := cacheComplete(dir)
+	if err != nil {
+		t.Fatalf("cacheComplete returned error: %v", err)
+	}
+	if complete {
+		t.Fatalf("expected cache to be incomplete without marker")
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, completeFileName), []byte("ok\n"), 0o644); err != nil {
+		t.Fatalf("write complete marker: %v", err)
+	}
+	complete, err = cacheComplete(dir)
+	if err != nil {
+		t.Fatalf("cacheComplete returned error: %v", err)
+	}
+	if !complete {
+		t.Fatalf("expected cache to be complete with marker")
+	}
+}

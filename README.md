@@ -12,7 +12,7 @@
 <div align="center">
 
 <p align="center">
-  Kubernetes-native model cache operator and CSI node driver for mounting AI model artifacts into workloads.
+  Kubernetes-native model cache operator, node-agent, and CSI driver for mounting AI model artifacts into workloads.
 </p>
 
 <div align="center">
@@ -42,13 +42,13 @@
 
 ## What is Praesto?
 
-Praesto helps Kubernetes workloads use AI and LLM models without downloading the same files again and again.
+Praesto helps Kubernetes workloads use AI and LLM model artifacts without downloading the same files again and again.
 
-You declare which model you need, and Praesto prepares it for your applications. Workloads receive the model as a normal mounted folder, so application containers do not need custom download logic.
+You declare which model you need with a `ModelCache`. Praesto prepares that cache on the selected Kubernetes nodes, then workloads receive the model as a normal mounted folder. Application containers do not need custom download logic.
 
-The main focus is the **CSI driver**: Praesto can cache models on Kubernetes nodes and mount them into Pods as read-only volumes. From the application point of view, the model is simply available at a path like `/models` or `/model`.
+The main mode is **local CSI mode**: a Praesto node-agent downloads public Hugging Face model artifacts into node-local storage, marks the cache as complete, and the CSI driver mounts it into Pods as a read-only volume. From the application point of view, the model is simply available at a path like `/models` or `/model`.
 
-Praesto also supports a legacy shared PVC mode, but the CSI-based local cache is the direction of the project.
+Praesto also supports a legacy shared PVC mode. In that mode, Praesto uses the classic PVC + downloader Job flow for clusters that prefer RWX storage.
 
 ## Installation
 
@@ -87,11 +87,21 @@ localCache:
   basePath: /mnt/fast-ssd/praesto
 ```
 
-Praesto expects the base path to already exist. The `praesto-node-agent` DaemonSet creates per-cache directories below it:
+Praesto expects the base path to already exist. The `praesto-node-agent` DaemonSet creates and owns per-cache directories below it:
 
 ```text
 <basePath>/<namespace>/<modelcache>
 ```
+
+For example:
+
+```text
+/var/praesto/praesto-ovms/ovms-distilbert-squad
+```
+
+The namespace directory may remain after cleanup, but Praesto removes the per-model subdirectory when the corresponding `ModelCacheNode` is deleted.
+
+Deleting a local-mode `ModelCache` deletes its `ModelCacheNode` resources. The node-agent finalizer then removes the node-local model directory before the `ModelCacheNode` disappears.
 
 To run the node-agent only on selected nodes, label those nodes and configure `nodeAgent.nodeSelector`:
 
@@ -104,6 +114,8 @@ nodeAgent:
   nodeSelector:
     praesto.io/cache-node: "true"
 ```
+
+Make sure the node-agent runs on every node that a local-mode `ModelCache.spec.nodeSelector` may select.
 
 ### Install with Helm
 
@@ -148,10 +160,57 @@ For chart options, see the commented [Helm values example](docs/helm/values.yaml
 
 ## Storage modes
 
-Praesto supports two storage modes:
+Praesto supports two storage modes. The mode is selected by `spec.storage.storageClassName`:
 
-- **Local CSI mode**: the primary mode. Praesto caches the model on selected nodes and mounts it into Pods through the CSI driver.
-- **Legacy PVC mode**: compatibility mode. Praesto downloads the model into a shared RWX PVC and mounts that PVC into Pods.
+- **Local CSI mode**: the primary mode. Leave `storageClassName` empty. Praesto creates one `ModelCacheNode` per selected node; the node-agent downloads the model into node-local storage; the CSI driver mounts the completed cache into Pods. No PV, PVC, or downloader Job is created for this mode.
+- **Legacy PVC mode**: compatibility mode. Set `storageClassName`. Praesto creates a shared RWX PVC and a downloader Job, then mounts that PVC into Pods. This mode does not use `ModelCacheNode`.
+
+Minimal local CSI `ModelCache`:
+
+```yaml
+apiVersion: praesto.praesto.io/v1alpha1
+kind: ModelCache
+metadata:
+  name: tinyllama
+  namespace: default
+spec:
+  source:
+    huggingface:
+      repo: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+  storage:
+    size: 5Gi
+  nodeSelector:
+    praesto.io/cache-node: "true"
+```
+
+Minimal legacy PVC `ModelCache`:
+
+```yaml
+apiVersion: praesto.praesto.io/v1alpha1
+kind: ModelCache
+metadata:
+  name: tinyllama-rwx
+  namespace: default
+spec:
+  source:
+    huggingface:
+      repo: TinyLlama/TinyLlama-1.1B-Chat-v1.0
+  storage:
+    size: 5Gi
+    storageClassName: rwx-storage-class
+```
+
+Local CSI mode currently supports public Hugging Face downloads from the node-agent. Hugging Face token/private model support remains available in the legacy downloader Job flow and will be added to local mode later.
+
+For local CSI mode, the node-agent writes cache markers into each model directory:
+
+```text
+.praesto-owner
+.praesto-manifest.json
+.praesto-complete
+```
+
+The CSI driver mounts a cache only after `.praesto-complete` exists, so workloads do not see partially downloaded models.
 
 See the [storage modes documentation](docs/STORAGE_MODES.md) for examples and details.
 
@@ -210,8 +269,8 @@ The webhook:
 
 - reads the requested `ModelCache` from the Pod namespace
 - requires the `ModelCache` to be `Ready`
-- injects a read-only CSI volume for local CSI mode
-- injects a read-only PVC volume for legacy PVC mode
+- injects a read-only CSI volume for local CSI mode (`storageClassName` empty)
+- injects a read-only PVC volume for legacy PVC mode (`storageClassName` set)
 
 The webhook uses `failurePolicy: Fail` inside opt-in namespaces. If Praesto is unavailable, annotated Pods in enabled namespaces are rejected instead of running without their model cache.
 
