@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	praestov1alpha1 "github.com/federicolepera/praesto/api/v1alpha1"
 	"github.com/federicolepera/praesto/internal/modeldownload"
@@ -217,6 +218,84 @@ func TestReconcileReportsMissingBasePath(t *testing.T) {
 	condition := findCondition(updated.Status.Conditions, praestov1alpha1.ModelCacheNodeConditionDirectoryReady)
 	if condition == nil || condition.Status != metav1.ConditionFalse || condition.Reason != "BasePathMissing" {
 		t.Fatalf("expected DirectoryReady=False/BasePathMissing, got %#v", condition)
+	}
+}
+
+func TestReconcileUnusedReadyCacheWaitsUntilTTLExpires(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := praestov1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+
+	modelCacheNode := testModelCacheNode()
+	modelCacheNode.Spec.Eviction.UnusedTTL = "1h"
+	modelCacheNode.Status.Phase = praestov1alpha1.ModelCacheNodePhaseReady
+	modelCacheNode.Status.LastUsedTime = metav1.NewTime(time.Now().Add(-10 * time.Minute))
+	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(modelCacheNode).WithStatusSubresource(&praestov1alpha1.ModelCacheNode{}).Build()
+	cacheRoot := t.TempDir()
+	localPath := filepath.Join(cacheRoot, "default", "tinyllama")
+	if err := os.MkdirAll(localPath, 0o775); err != nil {
+		t.Fatalf("create local path: %v", err)
+	}
+	reconciler := &Reconciler{Client: client, NodeName: "node-a", CacheRoot: cacheRoot, DirMode: 0o775}
+
+	result, evicted, err := reconciler.reconcileUnusedReadyCache(context.Background(), modelCacheNode, localPath)
+	if err != nil {
+		t.Fatalf("reconcile unused cache: %v", err)
+	}
+	if evicted {
+		t.Fatalf("expected cache not to be evicted before TTL expires")
+	}
+	if result.RequeueAfter <= 0 {
+		t.Fatalf("expected requeue after remaining TTL, got %v", result.RequeueAfter)
+	}
+	if _, err := os.Stat(localPath); err != nil {
+		t.Fatalf("expected local path to remain: %v", err)
+	}
+}
+
+func TestReconcileUnusedReadyCacheEvictsAfterTTL(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := praestov1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+
+	modelCacheNode := testModelCacheNode()
+	modelCacheNode.Spec.Eviction.UnusedTTL = "1h"
+	modelCacheNode.Status.Phase = praestov1alpha1.ModelCacheNodePhaseReady
+	modelCacheNode.Status.LastUsedTime = metav1.NewTime(time.Now().Add(-2 * time.Hour))
+	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(modelCacheNode).WithStatusSubresource(&praestov1alpha1.ModelCacheNode{}).Build()
+	cacheRoot := t.TempDir()
+	localPath := filepath.Join(cacheRoot, "default", "tinyllama")
+	if err := os.MkdirAll(localPath, 0o775); err != nil {
+		t.Fatalf("create local path: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(localPath, "model.safetensors"), []byte("weights"), 0o644); err != nil {
+		t.Fatalf("write model file: %v", err)
+	}
+	reconciler := &Reconciler{Client: client, NodeName: "node-a", CacheRoot: cacheRoot, DirMode: 0o775}
+
+	_, evicted, err := reconciler.reconcileUnusedReadyCache(context.Background(), modelCacheNode, localPath)
+	if err != nil {
+		t.Fatalf("reconcile unused cache: %v", err)
+	}
+	if !evicted {
+		t.Fatalf("expected cache to be evicted after TTL expires")
+	}
+	if _, err := os.Stat(localPath); !os.IsNotExist(err) {
+		t.Fatalf("expected local path to be removed, err=%v", err)
+	}
+
+	var updated praestov1alpha1.ModelCacheNode
+	if err := client.Get(context.Background(), clientObjectKey(modelCacheNode), &updated); err != nil {
+		t.Fatalf("get updated ModelCacheNode: %v", err)
+	}
+	if updated.Status.Phase != praestov1alpha1.ModelCacheNodePhaseEvicted {
+		t.Fatalf("expected phase Evicted, got %s", updated.Status.Phase)
+	}
+	ready := findCondition(updated.Status.Conditions, praestov1alpha1.ModelCacheNodeConditionReady)
+	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != "CacheEvicted" {
+		t.Fatalf("expected Ready=False/CacheEvicted, got %#v", ready)
 	}
 }
 

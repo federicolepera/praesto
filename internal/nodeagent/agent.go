@@ -8,11 +8,13 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	praestov1alpha1 "github.com/federicolepera/praesto/api/v1alpha1"
 	"github.com/federicolepera/praesto/internal/downloader"
 	"github.com/federicolepera/praesto/internal/modeldownload"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -27,6 +29,11 @@ const (
 	ManifestFileName = ".praesto-manifest.json"
 	CompleteFileName = ".praesto-complete"
 	FinalizerName    = "praesto.io/node-agent-finalizer"
+
+	usesModelCacheLabelKey              = "praesto.io/uses-model-cache"
+	praestoCSIDriverName                = "csi.praesto.io"
+	csiVolumeAttributeModelNamespaceKey = "modelCacheNamespace"
+	csiVolumeAttributeModelCacheNameKey = "modelCacheName"
 )
 
 type Reconciler struct {
@@ -81,6 +88,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	if modelCacheNode.Status.Phase == praestov1alpha1.ModelCacheNodePhaseReady {
+		return r.reconcileReadyCacheUsage(ctx, &modelCacheNode, localPath)
+	}
+	if modelCacheNode.Status.Phase == praestov1alpha1.ModelCacheNodePhaseEvicted {
 		return ctrl.Result{}, nil
 	}
 
@@ -175,6 +185,86 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
+}
+
+func (r *Reconciler) reconcileReadyCacheUsage(ctx context.Context, modelCacheNode *praestov1alpha1.ModelCacheNode, localPath string) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods, client.MatchingFields{"spec.nodeName": r.NodeName},
+		client.MatchingLabels{usesModelCacheLabelKey: "true"},
+	); err != nil {
+		return ctrl.Result{}, fmt.Errorf("list pods using model cache: %w", err)
+	}
+
+	activePods := countPodsUsingModelCache(pods.Items, modelCacheNode)
+	if activePods == 0 {
+		result, evicted, err := r.reconcileUnusedReadyCache(ctx, modelCacheNode, localPath)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if evicted {
+			logger.Info("evicted unused model cache from node", "modelCacheNode", modelCacheNode.Name, "path", localPath)
+		}
+		return result, nil
+	}
+
+	original := modelCacheNode.DeepCopy()
+	modelCacheNode.Status.LastUsedTime = metav1.Now()
+	if err := r.Status().Patch(ctx, modelCacheNode, client.MergeFrom(original)); err != nil {
+		if apierrors.IsConflict(err) {
+			return ctrl.Result{Requeue: true}, nil
+		}
+		return ctrl.Result{}, err
+	}
+	logger.Info("pods using model cache on node", "modelCacheNode", modelCacheNode.Name, "path", localPath, "podCount", activePods)
+	return ctrl.Result{}, nil
+}
+
+func (r *Reconciler) reconcileUnusedReadyCache(ctx context.Context, modelCacheNode *praestov1alpha1.ModelCacheNode, localPath string) (ctrl.Result, bool, error) {
+	unusedTTL := strings.TrimSpace(modelCacheNode.Spec.Eviction.UnusedTTL)
+	if unusedTTL == "" {
+		return ctrl.Result{}, false, nil
+	}
+
+	ttl, err := time.ParseDuration(unusedTTL)
+	if err != nil {
+		return ctrl.Result{}, false, fmt.Errorf("parse unused TTL %q: %w", unusedTTL, err)
+	}
+	if ttl <= 0 {
+		return ctrl.Result{}, false, fmt.Errorf("unused TTL must be greater than zero, got %q", unusedTTL)
+	}
+
+	now := metav1.Now()
+	if modelCacheNode.Status.LastUsedTime.IsZero() {
+		original := modelCacheNode.DeepCopy()
+		modelCacheNode.Status.LastUsedTime = now
+		if err := r.Status().Patch(ctx, modelCacheNode, client.MergeFrom(original)); err != nil {
+			if apierrors.IsConflict(err) {
+				return ctrl.Result{Requeue: true}, false, nil
+			}
+			return ctrl.Result{}, false, err
+		}
+		return ctrl.Result{RequeueAfter: ttl}, false, nil
+	}
+
+	evictAfter := modelCacheNode.Status.LastUsedTime.Add(ttl)
+	if now.Time.Before(evictAfter) {
+		return ctrl.Result{RequeueAfter: time.Until(evictAfter)}, false, nil
+	}
+
+	if err := os.RemoveAll(localPath); err != nil {
+		return ctrl.Result{}, false, fmt.Errorf("remove unused model cache directory %q: %w", localPath, err)
+	}
+
+	original := modelCacheNode.DeepCopy()
+	markModelCacheNodeEvicted(modelCacheNode, localPath)
+	if err := r.Status().Patch(ctx, modelCacheNode, client.MergeFrom(original)); err != nil {
+		if apierrors.IsConflict(err) {
+			return ctrl.Result{Requeue: true}, false, nil
+		}
+		return ctrl.Result{}, false, err
+	}
+	return ctrl.Result{}, true, nil
 }
 
 func (r *Reconciler) reconcileDelete(ctx context.Context, modelCacheNode *praestov1alpha1.ModelCacheNode, localPath string) (ctrl.Result, error) {
@@ -299,6 +389,48 @@ func markModelCacheNodeReady(modelCacheNode *praestov1alpha1.ModelCacheNode, loc
 		Reason:             "ModelReady",
 		Message:            "Model is ready on this node",
 	})
+}
+
+func markModelCacheNodeEvicted(modelCacheNode *praestov1alpha1.ModelCacheNode, localPath string) {
+	modelCacheNode.Status.LocalPath = localPath
+	modelCacheNode.Status.Phase = praestov1alpha1.ModelCacheNodePhaseEvicted
+	meta.SetStatusCondition(&modelCacheNode.Status.Conditions, metav1.Condition{
+		Type:               praestov1alpha1.ModelCacheNodeConditionReady,
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: modelCacheNode.Generation,
+		Reason:             "CacheEvicted",
+		Message:            "Model cache was evicted from this node after being unused past its TTL",
+	})
+	meta.SetStatusCondition(&modelCacheNode.Status.Conditions, metav1.Condition{
+		Type:               praestov1alpha1.ModelCacheNodeConditionDownloadComplete,
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: modelCacheNode.Generation,
+		Reason:             "CacheEvicted",
+		Message:            "Model artifacts are no longer present on this node",
+	})
+}
+
+func countPodsUsingModelCache(pods []corev1.Pod, modelCacheNode *praestov1alpha1.ModelCacheNode) int {
+	count := 0
+	for _, pod := range pods {
+		if podUsesModelCache(&pod, modelCacheNode) {
+			count++
+		}
+	}
+	return count
+}
+
+func podUsesModelCache(pod *corev1.Pod, modelCacheNode *praestov1alpha1.ModelCacheNode) bool {
+	for _, volume := range pod.Spec.Volumes {
+		if volume.CSI == nil || volume.CSI.Driver != praestoCSIDriverName {
+			continue
+		}
+		attributes := volume.CSI.VolumeAttributes
+		if attributes[csiVolumeAttributeModelNamespaceKey] == modelCacheNode.Spec.ModelCacheRef.Namespace && attributes[csiVolumeAttributeModelCacheNameKey] == modelCacheNode.Spec.ModelCacheRef.Name {
+			return true
+		}
+	}
+	return false
 }
 
 func writeJSONFile(path string, value any) error {
