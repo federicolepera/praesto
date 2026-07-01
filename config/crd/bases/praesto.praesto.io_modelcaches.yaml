@@ -159,6 +159,11 @@ spec:
                         type: object
                     type: object
                 type: object
+              eviction:
+                properties:
+                  unusedTTL:
+                    type: string
+                type: object
               nodeSelector:
                 additionalProperties:
                   type: string

@@ -10,3 +10,5 @@ spec:
       revision: main
   storage:
     size: 10Gi
+  eviction:
+    unusedTTL: 10s
