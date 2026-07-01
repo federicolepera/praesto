@@ -95,6 +95,7 @@ func TestPodMutatorHandle(t *testing.T) {
 		assertAllowed(t, resp)
 		assertModelCSIVolume(t, mutatedPod, "default", "tinyllama-test")
 		assertAppContainerMount(t, mutatedPod, DefaultModelMountPath)
+		assertUsesModelCacheLabel(t, mutatedPod)
 	})
 
 	t.Run("mounts legacy ready model cache as a PVC volume", func(t *testing.T) {
@@ -106,6 +107,7 @@ func TestPodMutatorHandle(t *testing.T) {
 		assertAllowed(t, resp)
 		assertModelPVCVolume(t, mutatedPod, "praesto-tinyllama")
 		assertAppContainerMount(t, mutatedPod, DefaultModelMountPath)
+		assertUsesModelCacheLabel(t, mutatedPod)
 	})
 
 	t.Run("mounts multiple local ready model caches as CSI volumes", func(t *testing.T) {
@@ -132,6 +134,7 @@ func TestPodMutatorHandle(t *testing.T) {
 		assertContainerMountNamed(t, mutatedPod, "openvino", "praesto-model-cache-0", "/models/resnet/1")
 		assertContainerMountNamed(t, mutatedPod, "openvino", "praesto-model-cache-1", "/models/resnet/2")
 		assertContainerMountNamed(t, mutatedPod, "openvino", "praesto-model-cache-2", "/models/yolov8/1")
+		assertUsesModelCacheLabel(t, mutatedPod)
 	})
 
 	t.Run("mounts multiple legacy model caches as PVC volumes", func(t *testing.T) {
@@ -476,6 +479,13 @@ func assertRejected(t *testing.T, resp admission.Response, expectedMessage strin
 	}
 	if resp.Result == nil || !strings.Contains(resp.Result.Message, expectedMessage) {
 		t.Fatalf("expected rejection message to contain %q, got %#v", expectedMessage, resp.Result)
+	}
+}
+
+func assertUsesModelCacheLabel(t *testing.T, pod *corev1.Pod) {
+	t.Helper()
+	if pod.Labels[UsesModelCacheLabelKey] != "true" {
+		t.Fatalf("expected label %s=true, got %#v", UsesModelCacheLabelKey, pod.Labels)
 	}
 }
 

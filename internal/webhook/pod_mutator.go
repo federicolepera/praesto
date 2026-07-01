@@ -19,6 +19,7 @@ const (
 	ModelPathAnnotationKey   = "praesto.io/model-mount-path"
 	ModelMountsAnnotationKey = "praesto.io/model-mounts"
 	ModelContainerNameKey    = "praesto.io/target-container"
+	UsesModelCacheLabelKey   = "praesto.io/uses-model-cache"
 	DefaultModelMountPath    = "/models"
 
 	ModelCacheVolumeName             = "praesto-model-cache"
@@ -94,12 +95,20 @@ func (m *PodMutator) Handle(ctx context.Context, req admission.Request) admissio
 			return admission.Errored(400, err)
 		}
 	}
+	ensureUsesModelCacheLabel(pod)
 
 	marshaledPod, err := json.Marshal(pod)
 	if err != nil {
 		return admission.Errored(500, fmt.Errorf("unable to marshal mutated pod: %w", err))
 	}
 	return admission.PatchResponseFromRaw(req.Object.Raw, marshaledPod)
+}
+
+func ensureUsesModelCacheLabel(pod *corev1.Pod) {
+	if pod.Labels == nil {
+		pod.Labels = map[string]string{}
+	}
+	pod.Labels[UsesModelCacheLabelKey] = "true"
 }
 
 func (m *PodMutator) resolveModelMounts(ctx context.Context, pod *corev1.Pod) ([]resolvedModelMount, error) {
