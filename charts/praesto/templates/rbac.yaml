@@ -85,6 +85,9 @@ metadata:
   labels:
     {{- include "praesto.labels" . | nindent 4 }}
 rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
 - apiGroups: ["praesto.praesto.io"]
   resources: ["modelcachenodes", "modelcaches"]
   verbs: ["get", "list", "watch"]
