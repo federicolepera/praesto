@@ -140,7 +140,7 @@ func (m *PodMutator) resolveModelMounts(ctx context.Context, pod *corev1.Pod) ([
 		return nil, err
 	}
 
-	modelCache, err := m.fetchReadyModelCache(ctx, pod.Namespace, modelCacheName)
+	modelCache, err := m.fetchInjectableModelCache(ctx, pod.Namespace, modelCacheName)
 	if err != nil {
 		return nil, err
 	}
@@ -179,7 +179,7 @@ func (m *PodMutator) resolveMultiModelMounts(ctx context.Context, namespace, ann
 		}
 		seenMountPaths[mountPath] = struct{}{}
 
-		modelCache, err := m.fetchReadyModelCache(ctx, namespace, modelCacheName)
+		modelCache, err := m.fetchInjectableModelCache(ctx, namespace, modelCacheName)
 		if err != nil {
 			return nil, err
 		}
@@ -197,10 +197,16 @@ func (m *PodMutator) resolveMultiModelMounts(ctx context.Context, namespace, ann
 	return modelMounts, nil
 }
 
-func (m *PodMutator) fetchReadyModelCache(ctx context.Context, namespace, name string) (*praestov1alpha1.ModelCache, error) {
+func (m *PodMutator) fetchInjectableModelCache(ctx context.Context, namespace, name string) (*praestov1alpha1.ModelCache, error) {
 	modelCache := &praestov1alpha1.ModelCache{}
 	if err := m.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, modelCache); err != nil {
 		return nil, fmt.Errorf("unable to fetch ModelCache %s: %w", name, err)
+	}
+	if usesCSIVolume(modelCache) {
+		if modelCache.Status.Phase == praestov1alpha1.ModelCachePhaseFailed {
+			return nil, fmt.Errorf("model cache %s is failed", name)
+		}
+		return modelCache, nil
 	}
 	if modelCache.Status.Phase != praestov1alpha1.ModelCachePhaseReady {
 		return nil, fmt.Errorf("model cache %s is not ready", name)

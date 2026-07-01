@@ -59,8 +59,29 @@ func TestPodMutatorHandle(t *testing.T) {
 		assertRejected(t, resp, "unable to fetch ModelCache")
 	})
 
-	t.Run("rejects model cache that is not ready", func(t *testing.T) {
+	t.Run("allows local model cache that is not ready", func(t *testing.T) {
 		mutator := newTestPodMutator(t, scheme, modelCacheWithStatus(praestov1alpha1.ModelCachePhasePending, "praesto-tinyllama"))
+		pod := annotatedPod(podWithContainers("app"))
+
+		resp, mutatedPod := handlePod(t, mutator, pod)
+
+		assertAllowed(t, resp)
+		assertModelCSIVolume(t, mutatedPod, "default", "tinyllama-test")
+		assertAppContainerMount(t, mutatedPod, DefaultModelMountPath)
+		assertUsesModelCacheLabel(t, mutatedPod)
+	})
+
+	t.Run("rejects local model cache that failed", func(t *testing.T) {
+		mutator := newTestPodMutator(t, scheme, modelCacheWithStatus(praestov1alpha1.ModelCachePhaseFailed, ""))
+		pod := annotatedPod(podWithContainers("app"))
+
+		resp, _ := handlePod(t, mutator, pod)
+
+		assertRejected(t, resp, "is failed")
+	})
+
+	t.Run("rejects legacy model cache that is not ready", func(t *testing.T) {
+		mutator := newTestPodMutator(t, scheme, legacyModelCacheWithStatus(praestov1alpha1.ModelCachePhasePending, "praesto-tinyllama"))
 		pod := annotatedPod(podWithContainers("app"))
 
 		resp, _ := handlePod(t, mutator, pod)
