@@ -19,6 +19,7 @@ const (
 	ModelPathAnnotationKey   = "praesto.io/model-mount-path"
 	ModelMountsAnnotationKey = "praesto.io/model-mounts"
 	ModelContainerNameKey    = "praesto.io/target-container"
+	UsesModelCacheLabelKey   = "praesto.io/uses-model-cache"
 	DefaultModelMountPath    = "/models"
 
 	ModelCacheVolumeName             = "praesto-model-cache"
@@ -94,12 +95,20 @@ func (m *PodMutator) Handle(ctx context.Context, req admission.Request) admissio
 			return admission.Errored(400, err)
 		}
 	}
+	ensureUsesModelCacheLabel(pod)
 
 	marshaledPod, err := json.Marshal(pod)
 	if err != nil {
 		return admission.Errored(500, fmt.Errorf("unable to marshal mutated pod: %w", err))
 	}
 	return admission.PatchResponseFromRaw(req.Object.Raw, marshaledPod)
+}
+
+func ensureUsesModelCacheLabel(pod *corev1.Pod) {
+	if pod.Labels == nil {
+		pod.Labels = map[string]string{}
+	}
+	pod.Labels[UsesModelCacheLabelKey] = "true"
 }
 
 func (m *PodMutator) resolveModelMounts(ctx context.Context, pod *corev1.Pod) ([]resolvedModelMount, error) {
@@ -131,7 +140,7 @@ func (m *PodMutator) resolveModelMounts(ctx context.Context, pod *corev1.Pod) ([
 		return nil, err
 	}
 
-	modelCache, err := m.fetchReadyModelCache(ctx, pod.Namespace, modelCacheName)
+	modelCache, err := m.fetchInjectableModelCache(ctx, pod.Namespace, modelCacheName)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +179,7 @@ func (m *PodMutator) resolveMultiModelMounts(ctx context.Context, namespace, ann
 		}
 		seenMountPaths[mountPath] = struct{}{}
 
-		modelCache, err := m.fetchReadyModelCache(ctx, namespace, modelCacheName)
+		modelCache, err := m.fetchInjectableModelCache(ctx, namespace, modelCacheName)
 		if err != nil {
 			return nil, err
 		}
@@ -188,10 +197,16 @@ func (m *PodMutator) resolveMultiModelMounts(ctx context.Context, namespace, ann
 	return modelMounts, nil
 }
 
-func (m *PodMutator) fetchReadyModelCache(ctx context.Context, namespace, name string) (*praestov1alpha1.ModelCache, error) {
+func (m *PodMutator) fetchInjectableModelCache(ctx context.Context, namespace, name string) (*praestov1alpha1.ModelCache, error) {
 	modelCache := &praestov1alpha1.ModelCache{}
 	if err := m.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, modelCache); err != nil {
 		return nil, fmt.Errorf("unable to fetch ModelCache %s: %w", name, err)
+	}
+	if usesCSIVolume(modelCache) {
+		if modelCache.Status.Phase == praestov1alpha1.ModelCachePhaseFailed {
+			return nil, fmt.Errorf("model cache %s is failed", name)
+		}
+		return modelCache, nil
 	}
 	if modelCache.Status.Phase != praestov1alpha1.ModelCachePhaseReady {
 		return nil, fmt.Errorf("model cache %s is not ready", name)

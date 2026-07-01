@@ -48,6 +48,8 @@ You declare which model you need with a `ModelCache`. Praesto prepares that cach
 
 The main mode is **local CSI mode**: a Praesto node-agent downloads public Hugging Face model artifacts into node-local storage, marks the cache as complete, and the CSI driver mounts it into Pods as a read-only volume. From the application point of view, the model is simply available at a path like `/models` or `/model`.
 
+Local caches can also be evicted per node after a configured unused TTL. If a new Pod later lands on a node where its cache was evicted, the node-agent rehydrates it on demand and the CSI mount succeeds after the cache is ready again.
+
 Praesto also supports a legacy shared PVC mode. In that mode, Praesto uses the classic PVC + downloader Job flow for clusters that prefer RWX storage.
 
 ## Installation
@@ -133,17 +135,17 @@ Pin release images explicitly:
 helm install praesto ./charts/praesto \
   --namespace praesto-system \
   --create-namespace \
-  --set image.tag=0.4.0 \
-  --set downloader.image.tag=0.4.0 \
-  --set csi.image.tag=0.4.0 \
-  --set nodeAgent.image.tag=0.4.0
+  --set image.tag=0.5.0 \
+  --set downloader.image.tag=0.5.0 \
+  --set csi.image.tag=0.5.0 \
+  --set nodeAgent.image.tag=0.5.0
 ```
 
 The chart can also be published and installed as an OCI Helm package from GHCR:
 
 ```bash
 helm install praesto oci://ghcr.io/federicolepera/praesto/charts/praesto \
-  --version 0.4.0 \
+  --version 0.5.0 \
   --namespace praesto-system \
   --create-namespace
 ```

@@ -4,7 +4,7 @@ Samples are organized by scenario.
 
 ## Quick start
 
-Use the quick start manifests to validate the full v0.3.1 flow:
+Use the quick start manifests to validate the full v0.5.0 flow:
 
 1. create a `ModelCache`
 2. wait for Praesto to create the PVC and downloader Job

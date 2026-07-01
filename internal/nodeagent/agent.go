@@ -8,18 +8,23 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	praestov1alpha1 "github.com/federicolepera/praesto/api/v1alpha1"
 	"github.com/federicolepera/praesto/internal/downloader"
+	"github.com/federicolepera/praesto/internal/kubeident"
 	"github.com/federicolepera/praesto/internal/modeldownload"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 const (
@@ -27,6 +32,15 @@ const (
 	ManifestFileName = ".praesto-manifest.json"
 	CompleteFileName = ".praesto-complete"
 	FinalizerName    = "praesto.io/node-agent-finalizer"
+
+	usesModelCacheLabelKey              = "praesto.io/uses-model-cache"
+	praestoCSIDriverName                = "csi.praesto.io"
+	csiVolumeAttributeModelNamespaceKey = "modelCacheNamespace"
+	csiVolumeAttributeModelCacheNameKey = "modelCacheName"
+
+	modelCacheNodeModelNamespaceLabel = "praesto.io/model-cache-namespace"
+	modelCacheNodeModelNameLabel      = "praesto.io/model-cache-name"
+	modelCacheNodeNodeLabel           = "praesto.io/node"
 )
 
 type Reconciler struct {
@@ -81,7 +95,18 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	if modelCacheNode.Status.Phase == praestov1alpha1.ModelCacheNodePhaseReady {
-		return ctrl.Result{}, nil
+
+		return r.reconcileReadyCacheUsage(ctx, &modelCacheNode, localPath)
+	}
+	if modelCacheNode.Status.Phase == praestov1alpha1.ModelCacheNodePhaseEvicted {
+		requested, err := r.modelCacheRequestedOnNode(ctx, &modelCacheNode)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if !requested {
+			return ctrl.Result{}, nil
+		}
+		logger.Info("rehydrating evicted model cache requested by local pod", "modelCacheNode", modelCacheNode.Name, "path", localPath)
 	}
 
 	var modelCache praestov1alpha1.ModelCache
@@ -177,6 +202,100 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	return ctrl.Result{}, nil
 }
 
+func (r *Reconciler) reconcileReadyCacheUsage(ctx context.Context, modelCacheNode *praestov1alpha1.ModelCacheNode, localPath string) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+	activePods, err := r.countPodsUsingModelCache(ctx, modelCacheNode)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if activePods == 0 {
+		result, evicted, err := r.reconcileUnusedReadyCache(ctx, modelCacheNode, localPath)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if evicted {
+			logger.Info("evicted unused model cache from node", "modelCacheNode", modelCacheNode.Name, "path", localPath)
+		}
+		return result, nil
+	}
+
+	original := modelCacheNode.DeepCopy()
+	modelCacheNode.Status.LastUsedTime = metav1.Now()
+	if err := r.Status().Patch(ctx, modelCacheNode, client.MergeFrom(original)); err != nil {
+		if apierrors.IsConflict(err) {
+			return ctrl.Result{Requeue: true}, nil
+		}
+		return ctrl.Result{}, err
+	}
+	logger.Info("pods using model cache on node", "modelCacheNode", modelCacheNode.Name, "path", localPath, "podCount", activePods)
+	return ctrl.Result{}, nil
+}
+
+func (r *Reconciler) modelCacheRequestedOnNode(ctx context.Context, modelCacheNode *praestov1alpha1.ModelCacheNode) (bool, error) {
+	activePods, err := r.countPodsUsingModelCache(ctx, modelCacheNode)
+	if err != nil {
+		return false, err
+	}
+	return activePods > 0, nil
+}
+
+func (r *Reconciler) countPodsUsingModelCache(ctx context.Context, modelCacheNode *praestov1alpha1.ModelCacheNode) (int, error) {
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods, client.MatchingFields{"spec.nodeName": r.NodeName},
+		client.MatchingLabels{usesModelCacheLabelKey: "true"},
+	); err != nil {
+		return 0, fmt.Errorf("list pods using model cache: %w", err)
+	}
+	return countPodsUsingModelCache(pods.Items, modelCacheNode), nil
+}
+
+func (r *Reconciler) reconcileUnusedReadyCache(ctx context.Context, modelCacheNode *praestov1alpha1.ModelCacheNode, localPath string) (ctrl.Result, bool, error) {
+	unusedTTL := strings.TrimSpace(modelCacheNode.Spec.Eviction.UnusedTTL)
+	if unusedTTL == "" {
+		return ctrl.Result{}, false, nil
+	}
+
+	ttl, err := time.ParseDuration(unusedTTL)
+	if err != nil {
+		return ctrl.Result{}, false, fmt.Errorf("parse unused TTL %q: %w", unusedTTL, err)
+	}
+	if ttl <= 0 {
+		return ctrl.Result{}, false, fmt.Errorf("unused TTL must be greater than zero, got %q", unusedTTL)
+	}
+
+	now := metav1.Now()
+	if modelCacheNode.Status.LastUsedTime.IsZero() {
+		original := modelCacheNode.DeepCopy()
+		modelCacheNode.Status.LastUsedTime = now
+		if err := r.Status().Patch(ctx, modelCacheNode, client.MergeFrom(original)); err != nil {
+			if apierrors.IsConflict(err) {
+				return ctrl.Result{Requeue: true}, false, nil
+			}
+			return ctrl.Result{}, false, err
+		}
+		return ctrl.Result{RequeueAfter: ttl}, false, nil
+	}
+
+	evictAfter := modelCacheNode.Status.LastUsedTime.Add(ttl)
+	if now.Time.Before(evictAfter) {
+		return ctrl.Result{RequeueAfter: time.Until(evictAfter)}, false, nil
+	}
+
+	if err := os.RemoveAll(localPath); err != nil {
+		return ctrl.Result{}, false, fmt.Errorf("remove unused model cache directory %q: %w", localPath, err)
+	}
+
+	original := modelCacheNode.DeepCopy()
+	markModelCacheNodeEvicted(modelCacheNode, localPath)
+	if err := r.Status().Patch(ctx, modelCacheNode, client.MergeFrom(original)); err != nil {
+		if apierrors.IsConflict(err) {
+			return ctrl.Result{Requeue: true}, false, nil
+		}
+		return ctrl.Result{}, false, err
+	}
+	return ctrl.Result{}, true, nil
+}
+
 func (r *Reconciler) reconcileDelete(ctx context.Context, modelCacheNode *praestov1alpha1.ModelCacheNode, localPath string) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 	if !controllerutil.ContainsFinalizer(modelCacheNode, FinalizerName) {
@@ -199,8 +318,40 @@ func (r *Reconciler) reconcileDelete(ctx context.Context, modelCacheNode *praest
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&praestov1alpha1.ModelCacheNode{}).
+		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(r.requestsForPod)).
 		Named("node-agent").
 		Complete(r)
+}
+
+func (r *Reconciler) requestsForPod(ctx context.Context, obj client.Object) []reconcile.Request {
+	pod, ok := obj.(*corev1.Pod)
+	if !ok || pod.Spec.NodeName != r.NodeName || pod.Labels[usesModelCacheLabelKey] != "true" {
+		return nil
+	}
+
+	requestsByName := map[string]reconcile.Request{}
+	for _, ref := range modelCacheRefsFromPod(pod) {
+		var nodes praestov1alpha1.ModelCacheNodeList
+		if err := r.List(ctx, &nodes, client.MatchingLabels{
+			modelCacheNodeModelNamespaceLabel: kubeident.LabelValue(ref.Namespace),
+			modelCacheNodeModelNameLabel:      kubeident.LabelValue(ref.Name),
+			modelCacheNodeNodeLabel:           kubeident.LabelValue(r.NodeName),
+		}); err != nil {
+			log.FromContext(ctx).Error(err, "list ModelCacheNodes for pod", "pod", client.ObjectKeyFromObject(pod), "modelCache", ref)
+			continue
+		}
+
+		for _, node := range nodes.Items {
+			request := reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&node)}
+			requestsByName[request.String()] = request
+		}
+	}
+
+	requests := make([]reconcile.Request, 0, len(requestsByName))
+	for _, request := range requestsByName {
+		requests = append(requests, request)
+	}
+	return requests
 }
 
 type basePathMissingError struct{ path string }
@@ -285,6 +436,7 @@ func cacheComplete(localPath string) (bool, error) {
 func markModelCacheNodeReady(modelCacheNode *praestov1alpha1.ModelCacheNode, localPath string) {
 	modelCacheNode.Status.LocalPath = localPath
 	modelCacheNode.Status.Phase = praestov1alpha1.ModelCacheNodePhaseReady
+	modelCacheNode.Status.LastUsedTime = metav1.Now()
 	meta.SetStatusCondition(&modelCacheNode.Status.Conditions, metav1.Condition{
 		Type:               praestov1alpha1.ModelCacheNodeConditionDownloadComplete,
 		Status:             metav1.ConditionTrue,
@@ -299,6 +451,68 @@ func markModelCacheNodeReady(modelCacheNode *praestov1alpha1.ModelCacheNode, loc
 		Reason:             "ModelReady",
 		Message:            "Model is ready on this node",
 	})
+}
+
+func markModelCacheNodeEvicted(modelCacheNode *praestov1alpha1.ModelCacheNode, localPath string) {
+	modelCacheNode.Status.LocalPath = localPath
+	modelCacheNode.Status.Phase = praestov1alpha1.ModelCacheNodePhaseEvicted
+	meta.SetStatusCondition(&modelCacheNode.Status.Conditions, metav1.Condition{
+		Type:               praestov1alpha1.ModelCacheNodeConditionReady,
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: modelCacheNode.Generation,
+		Reason:             "CacheEvicted",
+		Message:            "Model cache was evicted from this node after being unused past its TTL",
+	})
+	meta.SetStatusCondition(&modelCacheNode.Status.Conditions, metav1.Condition{
+		Type:               praestov1alpha1.ModelCacheNodeConditionDownloadComplete,
+		Status:             metav1.ConditionFalse,
+		ObservedGeneration: modelCacheNode.Generation,
+		Reason:             "CacheEvicted",
+		Message:            "Model artifacts are no longer present on this node",
+	})
+}
+
+func countPodsUsingModelCache(pods []corev1.Pod, modelCacheNode *praestov1alpha1.ModelCacheNode) int {
+	count := 0
+	for _, pod := range pods {
+		if podUsesModelCache(&pod, modelCacheNode) {
+			count++
+		}
+	}
+	return count
+}
+
+func modelCacheRefsFromPod(pod *corev1.Pod) []praestov1alpha1.ModelCacheNodeModelCacheRef {
+	refs := make([]praestov1alpha1.ModelCacheNodeModelCacheRef, 0)
+	seen := map[string]struct{}{}
+	for _, volume := range pod.Spec.Volumes {
+		if volume.CSI == nil || volume.CSI.Driver != praestoCSIDriverName {
+			continue
+		}
+		attributes := volume.CSI.VolumeAttributes
+		namespace := attributes[csiVolumeAttributeModelNamespaceKey]
+		name := attributes[csiVolumeAttributeModelCacheNameKey]
+		if namespace == "" || name == "" {
+			continue
+		}
+
+		key := namespace + "/" + name
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		refs = append(refs, praestov1alpha1.ModelCacheNodeModelCacheRef{Namespace: namespace, Name: name})
+	}
+	return refs
+}
+
+func podUsesModelCache(pod *corev1.Pod, modelCacheNode *praestov1alpha1.ModelCacheNode) bool {
+	for _, ref := range modelCacheRefsFromPod(pod) {
+		if ref.Namespace == modelCacheNode.Spec.ModelCacheRef.Namespace && ref.Name == modelCacheNode.Spec.ModelCacheRef.Name {
+			return true
+		}
+	}
+	return false
 }
 
 func writeJSONFile(path string, value any) error {

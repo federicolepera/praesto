@@ -377,6 +377,7 @@ func desiredModelCacheNode(modelCache *praestov1alpha1.ModelCache, nodeName stri
 				StorageClassName: modelCache.Spec.Storage.StorageClassName,
 				Size:             modelCache.Spec.Storage.Size,
 			},
+			Eviction: modelCache.Spec.Eviction,
 		},
 	}
 }

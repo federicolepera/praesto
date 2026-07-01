@@ -33,6 +33,7 @@ type ModelCacheNodeSpec struct {
 	ModelCacheRef ModelCacheNodeModelCacheRef `json:"modelCacheRef"`
 	NodeName      string                      `json:"nodeName"`
 	Storage       StorageNode                 `json:"storage"`
+	Eviction      Eviction                    `json:"eviction,omitempty"`
 }
 
 type ModelCacheNodeModelCacheRef struct {
@@ -58,6 +59,7 @@ const (
 
 // ModelCacheNodeStatus defines the observed state of ModelCacheNode.
 type ModelCacheNodeStatus struct {
+	LastUsedTime metav1.Time `json:"lastUsedTime,omitempty"`
 	// +kubebuilder:validation:Enum=Ready;Downloading;Failed;Pending;Evicted
 	Phase string `json:"phase,omitempty"`
 
