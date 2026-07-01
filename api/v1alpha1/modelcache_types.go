@@ -100,9 +100,14 @@ type Downloader struct {
 	ContainerSecurityContext *ContainerSecurityContext `json:"containerSecurityContext,omitempty"`
 }
 
+type Eviction struct {
+	UnusedTTL string `json:"unusedTTL,omitempty"`
+}
+
 // ModelCacheSpec defines the desired state of ModelCache
 // +kubebuilder:validation:XValidation:rule="self == oldSelf",message="ModelCache spec is immutable after creation"
 type ModelCacheSpec struct {
+	Eviction Eviction `json:"eviction,omitempty"`
 	// +kubebuilder:validation:Required
 	Source Source `json:"source"`
 
