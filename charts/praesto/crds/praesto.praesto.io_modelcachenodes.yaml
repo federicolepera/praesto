@@ -39,6 +39,11 @@ spec:
           spec:
             description: spec defines the desired state of ModelCacheNode
             properties:
+              eviction:
+                properties:
+                  unusedTTL:
+                    type: string
+                type: object
               modelCacheRef:
                 properties:
                   name:
@@ -133,6 +138,9 @@ spec:
                 - type
                 x-kubernetes-list-type: map
               downloadJobName:
+                type: string
+              lastUsedTime:
+                format: date-time
                 type: string
               localPath:
                 type: string
