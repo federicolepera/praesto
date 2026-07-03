@@ -25,8 +25,7 @@ spec:
 In this mode:
 
 - Praesto creates one `ModelCacheNode` per selected node.
-- The node-agent prepares a local directory under `localCache.basePath`.
-- A downloader Job fills the node-local cache.
+- The node-agent prepares a local directory under `localCache.basePath` and downloads the model.
 - The CSI driver mounts the ready cache into annotated Pods.
 
 Default local path:
@@ -37,9 +36,9 @@ Default local path:
 
 The administrator only prepares the base path, for example `/var/praesto`. Praesto creates the per-model directories below it.
 
-## Legacy PVC mode
+## Shared PVC mode
 
-When `storageClassName` is set, Praesto uses the legacy shared PVC workflow.
+When `storageClassName` is set, Praesto uses the shared PVC workflow.
 
 ```yaml
 apiVersion: praesto.praesto.io/v1alpha1
@@ -67,4 +66,4 @@ This mode requires a StorageClass that supports `ReadWriteMany` if multiple Pods
 For deeper details, see:
 
 - [Local CSI mode](local-csi-mode.md)
-- [Legacy PVC mode](legacy-pvc-mode.md)
+- [Shared PVC mode](shared-pvc-mode.md)
