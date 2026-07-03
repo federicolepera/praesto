@@ -21,6 +21,8 @@ import (
 
 const DefaultDownloaderImage = "ghcr.io/federicolepera/praesto/downloader:latest"
 
+const DefaultDownloadJobTTLSecondsAfterFinished int32 = 60
+
 const DefaultLocalCacheBasePath = "/var/praesto"
 
 const (
@@ -425,8 +427,9 @@ func DownloadJobForModelCacheNode(modelCache *praestov1alpha1.ModelCache, modelC
 			Labels:    DownloadJobLabels(modelCacheNode.Name),
 		},
 		Spec: batchv1.JobSpec{
-			ActiveDeadlineSeconds: ptrToInt64(7200),
-			BackoffLimit:          ptrToInt32(3),
+			ActiveDeadlineSeconds:   ptrToInt64(7200),
+			BackoffLimit:            ptrToInt32(3),
+			TTLSecondsAfterFinished: ptrToInt32(DefaultDownloadJobTTLSecondsAfterFinished),
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: ModelCacheLabels(modelCacheNode.Name)},
 				Spec: corev1.PodSpec{
@@ -499,8 +502,9 @@ func DownloadJobForModelCache(modelCache *praestov1alpha1.ModelCache, pvc *corev
 			Labels:    DownloadJobLabels(modelCache.Name),
 		},
 		Spec: batchv1.JobSpec{
-			ActiveDeadlineSeconds: ptrToInt64(7200),
-			BackoffLimit:          ptrToInt32(3),
+			ActiveDeadlineSeconds:   ptrToInt64(7200),
+			BackoffLimit:            ptrToInt32(3),
+			TTLSecondsAfterFinished: ptrToInt32(DefaultDownloadJobTTLSecondsAfterFinished),
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{Labels: ModelCacheLabels(modelCache.Name)},
 				Spec: corev1.PodSpec{

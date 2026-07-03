@@ -18,7 +18,9 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/federicolepera/praesto/internal/downloader"
@@ -46,7 +48,14 @@ const (
 	modelCacheNodeModelNameLabel      = "praesto.io/model-cache-name"
 	modelCacheNodeModelUIDLabel       = "praesto.io/model-cache-uid"
 	modelCacheNodeNodeLabel           = "praesto.io/node"
+	modelMountsAnnotationKey          = "praesto.io/model-mounts"
+	usesModelCacheLabelKey            = "praesto.io/uses-model-cache"
 )
+
+type modelMountAnnotation struct {
+	ModelCache string `json:"modelCache"`
+	MountPath  string `json:"mountPath"`
+}
 
 // ModelCacheReconciler reconciles a ModelCache object
 type ModelCacheReconciler struct {
@@ -60,6 +69,7 @@ type ModelCacheReconciler struct {
 // +kubebuilder:rbac:groups=praesto.praesto.io,resources=modelcaches/finalizers,verbs=update
 // +kubebuilder:rbac:groups=praesto.praesto.io,resources=modelcachenodes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
@@ -74,7 +84,7 @@ type ModelCacheReconciler struct {
 // For more details, check Reconcile and its Result here:
 // - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.22.1/pkg/reconcile
 //
-//nolint:gocyclo // Reconcile still contains both legacy PVC and local ModelCacheNode flows; split in a follow-up refactor.
+//nolint:gocyclo // Reconcile still contains both shared PVC and local ModelCacheNode flows; split in a follow-up refactor.
 func (r *ModelCacheReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := logf.FromContext(ctx)
 
@@ -102,7 +112,24 @@ func (r *ModelCacheReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}
 
+	if !isLocalModelCache(&modelCache) && modelCache.Status.Phase == praestov1alpha1.ModelCachePhaseEvicted {
+		requested, err := r.modelCacheRequestedByPod(ctx, &modelCache)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if !requested {
+			logger.Info("PVC ModelCache is evicted and not currently requested", "modelCache", client.ObjectKeyFromObject(&modelCache))
+			return ctrl.Result{}, nil
+		}
+		logger.Info("Rehydrating evicted PVC ModelCache requested by a Pod", "modelCache", client.ObjectKeyFromObject(&modelCache))
+	}
+
 	if modelCache.Status.Phase == praestov1alpha1.ModelCachePhaseReady && !isLocalModelCache(&modelCache) {
+		handled, result, err := r.reconcileReadyPVCModelCacheUsage(ctx, &modelCache)
+		if err != nil || handled {
+			return result, err
+		}
+
 		pvc, err := downloader.GetManagedModelCachePVC(ctx, r.readyPVCReader(), &modelCache)
 		if err != nil {
 			logger.Error(err, "unable to get PVC for ready ModelCache")
@@ -262,6 +289,7 @@ func (r *ModelCacheReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			modelCache.Status.Phase = praestov1alpha1.ModelCachePhaseReady
 			modelCache.Status.PvcName = pvc.Name
 			modelCache.Status.DownloadJobName = job.Name
+			modelCache.Status.LastUsedTime = metav1.Now()
 			status.SetCondition(&modelCache, status.ConditionPVCReady, metav1.ConditionTrue, "PVCBound", fmt.Sprintf("PVC %s is bound", pvc.Name))
 			status.SetCondition(&modelCache, status.ConditionDownloadComplete, metav1.ConditionTrue, "JobSucceeded", "Download job completed successfully")
 			status.SetCondition(&modelCache, status.ConditionReady, metav1.ConditionTrue, "ModelReady", "Model is ready to be mounted")
@@ -287,6 +315,151 @@ func (r *ModelCacheReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 func isLocalModelCache(modelCache *praestov1alpha1.ModelCache) bool {
 	return modelCache.Spec.Storage.StorageClassName == ""
+}
+
+func (r *ModelCacheReconciler) reconcileReadyPVCModelCacheUsage(ctx context.Context, modelCache *praestov1alpha1.ModelCache) (bool, ctrl.Result, error) {
+	activePods, err := r.countPodsUsingModelCache(ctx, modelCache)
+	if err != nil {
+		return true, ctrl.Result{}, err
+	}
+	if activePods > 0 {
+		original := modelCache.DeepCopy()
+		modelCache.Status.LastUsedTime = metav1.Now()
+		if err := r.Status().Patch(ctx, modelCache, client.MergeFrom(original)); err != nil {
+			if apierrors.IsConflict(err) {
+				return true, ctrl.Result{Requeue: true}, nil
+			}
+			return true, ctrl.Result{}, err
+		}
+		return false, ctrl.Result{}, nil
+	}
+
+	unusedTTL := strings.TrimSpace(modelCache.Spec.Eviction.UnusedTTL)
+	if unusedTTL == "" {
+		return false, ctrl.Result{}, nil
+	}
+
+	ttl, err := time.ParseDuration(unusedTTL)
+	if err != nil {
+		return true, ctrl.Result{}, fmt.Errorf("parse unused TTL %q: %w", unusedTTL, err)
+	}
+	if ttl <= 0 {
+		return true, ctrl.Result{}, fmt.Errorf("unused TTL must be greater than zero, got %q", unusedTTL)
+	}
+
+	now := metav1.Now()
+	if modelCache.Status.LastUsedTime.IsZero() {
+		original := modelCache.DeepCopy()
+		modelCache.Status.LastUsedTime = now
+		if err := r.Status().Patch(ctx, modelCache, client.MergeFrom(original)); err != nil {
+			if apierrors.IsConflict(err) {
+				return true, ctrl.Result{Requeue: true}, nil
+			}
+			return true, ctrl.Result{}, err
+		}
+		return true, ctrl.Result{RequeueAfter: ttl}, nil
+	}
+
+	evictAfter := modelCache.Status.LastUsedTime.Add(ttl)
+	if now.Time.Before(evictAfter) {
+		return true, ctrl.Result{RequeueAfter: time.Until(evictAfter)}, nil
+	}
+
+	if err := r.deletePVCModeArtifacts(ctx, modelCache); err != nil {
+		return true, ctrl.Result{}, err
+	}
+	original := modelCache.DeepCopy()
+	markPVCModelCacheEvicted(modelCache)
+	if err := r.Status().Patch(ctx, modelCache, client.MergeFrom(original)); err != nil {
+		if apierrors.IsConflict(err) {
+			return true, ctrl.Result{Requeue: true}, nil
+		}
+		return true, ctrl.Result{}, err
+	}
+	return true, ctrl.Result{}, nil
+}
+
+func (r *ModelCacheReconciler) deletePVCModeArtifacts(ctx context.Context, modelCache *praestov1alpha1.ModelCache) error {
+	job := &batchv1.Job{}
+	jobKey := client.ObjectKey{Namespace: modelCache.Namespace, Name: downloader.JobNameForModelCache(modelCache.Name)}
+	if err := r.Get(ctx, jobKey, job); err == nil {
+		if err := r.Delete(ctx, job); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+	} else if !apierrors.IsNotFound(err) {
+		return err
+	}
+
+	pvc := &corev1.PersistentVolumeClaim{}
+	pvcKey := client.ObjectKey{Namespace: modelCache.Namespace, Name: downloader.PVCNameForModelCache(modelCache.Name)}
+	if err := r.Get(ctx, pvcKey, pvc); err == nil {
+		if err := r.Delete(ctx, pvc); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+	} else if !apierrors.IsNotFound(err) {
+		return err
+	}
+	return nil
+}
+
+func markPVCModelCacheEvicted(modelCache *praestov1alpha1.ModelCache) {
+	modelCache.Status.Phase = praestov1alpha1.ModelCachePhaseEvicted
+	modelCache.Status.PvcName = downloader.PVCNameForModelCache(modelCache.Name)
+	modelCache.Status.DownloadJobName = ""
+	status.SetCondition(modelCache, status.ConditionPVCReady, metav1.ConditionFalse, "CacheEvicted", "PVC cache was evicted after being unused past its TTL")
+	status.SetCondition(modelCache, status.ConditionDownloadComplete, metav1.ConditionFalse, "CacheEvicted", "Downloaded model artifacts are no longer present in the PVC cache")
+	status.SetCondition(modelCache, status.ConditionReady, metav1.ConditionFalse, "CacheEvicted", "Model cache was evicted and will be rehydrated on demand")
+}
+
+func (r *ModelCacheReconciler) modelCacheRequestedByPod(ctx context.Context, modelCache *praestov1alpha1.ModelCache) (bool, error) {
+	count, err := r.countPodsUsingModelCache(ctx, modelCache)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func (r *ModelCacheReconciler) countPodsUsingModelCache(ctx context.Context, modelCache *praestov1alpha1.ModelCache) (int, error) {
+	var pods corev1.PodList
+	if err := r.List(ctx, &pods, client.InNamespace(modelCache.Namespace), client.MatchingLabels{usesModelCacheLabelKey: "true"}); err != nil {
+		return 0, fmt.Errorf("list Pods using ModelCache: %w", err)
+	}
+
+	count := 0
+	for i := range pods.Items {
+		for _, name := range modelCacheNamesFromPod(&pods.Items[i]) {
+			if name == modelCache.Name {
+				count++
+				break
+			}
+		}
+	}
+	return count, nil
+}
+
+func modelCacheNamesFromPod(pod *corev1.Pod) []string {
+	annotation := strings.TrimSpace(pod.Annotations[modelMountsAnnotationKey])
+	if annotation == "" {
+		return nil
+	}
+	var mounts []modelMountAnnotation
+	if err := json.Unmarshal([]byte(annotation), &mounts); err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(mounts))
+	seen := map[string]struct{}{}
+	for _, mount := range mounts {
+		name := strings.TrimSpace(mount.ModelCache)
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	return names
 }
 
 func (r *ModelCacheReconciler) reconcileModelCacheDelete(ctx context.Context, modelCache *praestov1alpha1.ModelCache) (ctrl.Result, error) {
@@ -470,10 +643,30 @@ func (r *ModelCacheReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&praestov1alpha1.ModelCache{}).
 		Watches(&praestov1alpha1.ModelCacheNode{}, handler.EnqueueRequestsFromMapFunc(r.requestsForModelCacheNode)).
+		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(r.requestsForPod)).
 		Owns(&corev1.PersistentVolumeClaim{}).
 		Owns(&batchv1.Job{}).
 		Named("modelcache").
 		Complete(r)
+}
+
+func (r *ModelCacheReconciler) requestsForPod(_ context.Context, object client.Object) []reconcile.Request {
+	pod, ok := object.(*corev1.Pod)
+	if !ok || pod.Labels[usesModelCacheLabelKey] != "true" {
+		return nil
+	}
+
+	names := modelCacheNamesFromPod(pod)
+	requests := make([]reconcile.Request, 0, len(names))
+	seen := map[string]struct{}{}
+	for _, name := range names {
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKey{Namespace: pod.Namespace, Name: name}})
+	}
+	return requests
 }
 
 func (r *ModelCacheReconciler) requestsForModelCacheNode(ctx context.Context, object client.Object) []reconcile.Request {

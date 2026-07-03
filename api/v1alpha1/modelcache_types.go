@@ -125,15 +125,17 @@ const (
 	ModelCachePhaseDownloading = "Downloading"
 	ModelCachePhaseFailed      = "Failed"
 	ModelCachePhasePending     = "Pending"
+	ModelCachePhaseEvicted     = "Evicted"
 )
 
 // ModelCacheStatus defines the observed state of ModelCache.
 type ModelCacheStatus struct {
-	// +kubebuilder:validation:Enum=Ready;Downloading;Failed;Pending
+	// +kubebuilder:validation:Enum=Ready;Downloading;Failed;Pending;Evicted
 	Phase string `json:"phase,omitempty"`
 
-	PvcName         string `json:"pvcName,omitempty"`
-	DownloadJobName string `json:"downloadJobName,omitempty"`
+	PvcName         string      `json:"pvcName,omitempty"`
+	DownloadJobName string      `json:"downloadJobName,omitempty"`
+	LastUsedTime    metav1.Time `json:"lastUsedTime,omitempty"`
 
 	TotalNodes       int32 `json:"totalNodes,omitempty"`
 	ReadyNodes       int32 `json:"readyNodes,omitempty"`

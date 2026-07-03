@@ -50,7 +50,7 @@ The main mode is **local CSI mode**: a Praesto node-agent downloads public Huggi
 
 Local caches can also be evicted per node after a configured unused TTL. If a new Pod later lands on a node where its cache was evicted, the node-agent rehydrates it on demand and the CSI mount succeeds after the cache is ready again.
 
-Praesto also supports a legacy shared PVC mode. In that mode, Praesto uses the classic PVC + downloader Job flow for clusters that prefer RWX storage.
+Praesto also supports a shared PVC mode. In that mode, Praesto uses a PVC + downloader Job flow for clusters that prefer RWX storage.
 
 ## Installation
 
@@ -65,7 +65,7 @@ You need:
 - `helm`
 - cert-manager installed in the cluster when `webhooks.certManager.enabled=true` (default)
 - for local CSI mode, node-local storage prepared as described below
-- for legacy PVC mode, a StorageClass that supports `ReadWriteMany`
+- for shared PVC mode, a StorageClass that supports `ReadWriteMany`
 
 ### Prepare node local cache storage
 
@@ -135,17 +135,17 @@ Pin release images explicitly:
 helm install praesto ./charts/praesto \
   --namespace praesto-system \
   --create-namespace \
-  --set image.tag=0.5.0 \
-  --set downloader.image.tag=0.5.0 \
-  --set csi.image.tag=0.5.0 \
-  --set nodeAgent.image.tag=0.5.0
+  --set image.tag=0.6.0 \
+  --set downloader.image.tag=0.6.0 \
+  --set csi.image.tag=0.6.0 \
+  --set nodeAgent.image.tag=0.6.0
 ```
 
 The chart can also be published and installed as an OCI Helm package from GHCR:
 
 ```bash
 helm install praesto oci://ghcr.io/federicolepera/praesto/charts/praesto \
-  --version 0.5.0 \
+  --version 0.6.0 \
   --namespace praesto-system \
   --create-namespace
 ```
@@ -165,7 +165,7 @@ For chart options, see the commented [Helm values example](docs/helm/values.yaml
 Praesto supports two storage modes. The mode is selected by `spec.storage.storageClassName`:
 
 - **Local CSI mode**: the primary mode. Leave `storageClassName` empty. Praesto creates one `ModelCacheNode` per selected node; the node-agent downloads the model into node-local storage; the CSI driver mounts the completed cache into Pods. No PV, PVC, or downloader Job is created for this mode.
-- **Legacy PVC mode**: compatibility mode. Set `storageClassName`. Praesto creates a shared RWX PVC and a downloader Job, then mounts that PVC into Pods. This mode does not use `ModelCacheNode`.
+- **Shared PVC mode**: set `storageClassName`. Praesto creates a shared RWX PVC and a downloader Job, then mounts that PVC into Pods. This mode does not use `ModelCacheNode`.
 
 Minimal local CSI `ModelCache`:
 
@@ -185,7 +185,7 @@ spec:
     praesto.io/cache-node: "true"
 ```
 
-Minimal legacy PVC `ModelCache`:
+Minimal shared PVC `ModelCache`:
 
 ```yaml
 apiVersion: praesto.praesto.io/v1alpha1
@@ -202,7 +202,7 @@ spec:
     storageClassName: rwx-storage-class
 ```
 
-Local CSI mode currently supports public Hugging Face downloads from the node-agent. Hugging Face token/private model support remains available in the legacy downloader Job flow and will be added to local mode later.
+Local CSI mode currently supports public Hugging Face downloads from the node-agent. Hugging Face token/private model support remains available in the PVC downloader Job flow and will be added to local mode later.
 
 For local CSI mode, the node-agent writes cache markers into each model directory:
 
@@ -263,8 +263,10 @@ If the target container is omitted, Praesto mounts the cache into the first cont
 The older single-model annotations are still supported for compatibility, but `praesto.io/model-mounts` is the preferred form:
 
 ```yaml
-praesto.io/model-cache: tinyllama-test
-praesto.io/model-mount-path: /models
+praesto.io/model-mounts: |
+  [
+    {"modelCache":"tinyllama-test","mountPath":"/models"}
+  ]
 ```
 
 The webhook:
@@ -272,7 +274,7 @@ The webhook:
 - reads the requested `ModelCache` from the Pod namespace
 - requires the `ModelCache` to be `Ready`
 - injects a read-only CSI volume for local CSI mode (`storageClassName` empty)
-- injects a read-only PVC volume for legacy PVC mode (`storageClassName` set)
+- injects a read-only PVC volume for shared PVC mode (`storageClassName` set)
 
 The webhook uses `failurePolicy: Fail` inside opt-in namespaces. If Praesto is unavailable, annotated Pods in enabled namespaces are rejected instead of running without their model cache.
 
@@ -284,7 +286,7 @@ The validating webhook checks common `ModelCache` input errors:
 - `spec.source.huggingface.repo` is required
 - HuggingFace token `secretRef.name` and `secretRef.key` must be configured together
 - `spec` is immutable after creation
-- in legacy PVC mode, `spec.storage.storageClassName` must reference an existing StorageClass
+- in shared PVC mode, `spec.storage.storageClassName` must reference an existing StorageClass
 
 ## License
 

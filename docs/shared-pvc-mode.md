@@ -1,6 +1,6 @@
-# Legacy PVC mode
+# Shared PVC mode
 
-Legacy PVC mode is the simpler compatibility workflow.
+Shared PVC mode is the RWX PVC workflow.
 
 Use it when your cluster already provides a `ReadWriteMany` StorageClass and you want a fast smoke test of the operator flow.
 

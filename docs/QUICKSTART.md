@@ -1,6 +1,6 @@
 # Quickstart
 
-This quickstart validates the legacy RWX PVC flow:
+This quickstart validates the shared RWX PVC flow:
 
 ```text
 ModelCache → PVC → downloader Job → Ready status → annotated Deployment → mounted model files
@@ -65,8 +65,10 @@ kubectl apply -f config/samples/quickstart/01-tokenizer-deployment.yaml
 The Deployment uses these annotations:
 
 ```yaml
-praesto.io/model-cache: tinyllama-test
-praesto.io/model-mount-path: /models
+praesto.io/model-mounts: |
+  [
+    {"modelCache":"tinyllama-test","mountPath":"/models"}
+  ]
 ```
 
 The mutating webhook mounts the generated PVC read-only into the Pod.

@@ -8,7 +8,7 @@ certificate resources, services, admission webhooks, the CSI node driver, and th
 - Kubernetes cluster
 - cert-manager installed when `webhooks.certManager.enabled=true` (default)
 - For local per-node cache mode, prepare `localCache.basePath` on nodes that should host caches. The default is `/var/praesto`.
-- Praesto CSI node driver and node-agent enabled for local per-node cache mode, or an RWX-capable StorageClass for the legacy PVC mode
+- Praesto CSI node driver and node-agent enabled for local per-node cache mode, or an RWX-capable StorageClass for shared PVC mode
 
 The administrator prepares only the base path, for example:
 
@@ -25,16 +25,16 @@ The Praesto node-agent creates per-cache directories below it, such as `/var/pra
 helm install praesto ./charts/praesto --namespace praesto-system --create-namespace
 ```
 
-Pin release images explicitly for v0.5.0:
+Pin release images explicitly for v0.6.0:
 
 ```bash
 helm install praesto ./charts/praesto \
   --namespace praesto-system \
   --create-namespace \
-  --set image.tag=0.5.0 \
-  --set downloader.image.tag=0.5.0 \
-  --set csi.image.tag=0.5.0 \
-  --set nodeAgent.image.tag=0.5.0
+  --set image.tag=0.6.0 \
+  --set downloader.image.tag=0.6.0 \
+  --set csi.image.tag=0.6.0 \
+  --set nodeAgent.image.tag=0.6.0
 ```
 
 ## Pod injection opt-in
@@ -64,17 +64,17 @@ nodeAgent:
 | Value | Default | Description |
 |-------|---------|-------------|
 | `image.repository` | `ghcr.io/federicolepera/praesto` | Operator image repository |
-| `image.tag` | `0.5.0` | Operator image tag |
+| `image.tag` | `0.6.0` | Operator image tag |
 | `downloader.image.repository` | `ghcr.io/federicolepera/praesto/downloader` | Default downloader image documented for users |
-| `downloader.image.tag` | `0.5.0` | Default downloader image tag documented for users |
+| `downloader.image.tag` | `0.6.0` | Default downloader image tag documented for users |
 | `localCache.basePath` | `/var/praesto` | Host base path where Praesto stores node-local model caches |
 | `csi.enabled` | `true` | Install the Praesto CSI node driver |
 | `csi.driverName` | `csi.praesto.io` | CSI driver name used by injected volumes |
 | `csi.image.repository` | `ghcr.io/federicolepera/praesto/csi-node-driver` | CSI node driver image repository |
-| `csi.image.tag` | `0.5.0` | CSI node driver image tag |
+| `csi.image.tag` | `0.6.0` | CSI node driver image tag |
 | `nodeAgent.enabled` | `true` | Install the Praesto node-agent DaemonSet |
 | `nodeAgent.image.repository` | `ghcr.io/federicolepera/praesto/node-agent` | Node-agent image repository |
-| `nodeAgent.image.tag` | `0.5.0` | Node-agent image tag |
+| `nodeAgent.image.tag` | `0.6.0` | Node-agent image tag |
 | `nodeAgent.nodeSelector` | `{}` | Node selector used to schedule the node-agent DaemonSet |
 | `webhooks.enabled` | `true` | Install admission webhooks |
 | `webhooks.certManager.enabled` | `true` | Use cert-manager CA injection and serving cert |

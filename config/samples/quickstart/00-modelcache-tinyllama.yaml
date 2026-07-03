@@ -11,3 +11,5 @@ spec:
   storage:
     storageClassName: standard
     size: 10Gi
+  eviction:
+    unusedTTL: 20s

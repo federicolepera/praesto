@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/federicolepera/praesto/internal/downloader"
 	"github.com/federicolepera/praesto/internal/kubeident"
@@ -270,6 +271,70 @@ var _ = Describe("ModelCache Controller", func() {
 		Expect(k8sClient.Update(ctx, terminatingPVC)).To(Succeed())
 	})
 
+	It("evicts an unused ready PVC ModelCache after TTL", func() {
+		ttlModelCacheName := fmt.Sprintf("ttl-cache-%s", rand.String(8))
+		ttlModelCacheKey := types.NamespacedName{Name: ttlModelCacheName, Namespace: namespace}
+		mc := &praestov1alpha1.ModelCache{
+			ObjectMeta: metav1.ObjectMeta{Name: ttlModelCacheName, Namespace: namespace},
+			Spec: praestov1alpha1.ModelCacheSpec{
+				Eviction: praestov1alpha1.Eviction{UnusedTTL: "1h"},
+				Source:   praestov1alpha1.Source{Huggingface: praestov1alpha1.HuggingfaceSource{Repo: "org/model"}},
+				Storage:  praestov1alpha1.Storage{StorageClassName: storageClassName, Size: "1Gi"},
+			},
+		}
+		Expect(k8sClient.Create(ctx, mc)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, mc) })
+
+		pvc := &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      downloader.PVCNameForModelCache(ttlModelCacheName),
+				Namespace: namespace,
+				Labels:    downloader.ModelCacheLabels(ttlModelCacheName),
+			},
+			Spec: validPVCSpec(),
+		}
+		Expect(k8sClient.Create(ctx, pvc)).To(Succeed())
+		pvc.Status.Phase = corev1.ClaimBound
+		Expect(k8sClient.Status().Update(ctx, pvc)).To(Succeed())
+
+		mc = markModelCacheReady(ctx, ttlModelCacheKey, pvc.Name)
+		mc.Status.LastUsedTime = metav1.NewTime(time.Now().Add(-2 * time.Hour))
+		Expect(k8sClient.Status().Update(ctx, mc)).To(Succeed())
+
+		controllerReconciler := &ModelCacheReconciler{Client: k8sClient, APIReader: k8sClient, Scheme: k8sClient.Scheme()}
+		_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: ttlModelCacheKey})
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(k8sClient.Get(ctx, ttlModelCacheKey, mc)).To(Succeed())
+		Expect(mc.Status.Phase).To(Equal(praestov1alpha1.ModelCachePhaseEvicted))
+		Expect(mc.Status.PvcName).To(Equal(pvc.Name))
+		Expect(pvcReadyConditionReason(mc.Status.Conditions)).To(Equal("CacheEvicted"))
+	})
+
+	It("rehydrates an evicted PVC ModelCache when a Pod requests it", func() {
+		mc := &praestov1alpha1.ModelCache{}
+		Expect(k8sClient.Get(ctx, typeNamespacedName, mc)).To(Succeed())
+		mc.Status.Phase = praestov1alpha1.ModelCachePhaseEvicted
+		mc.Status.PvcName = downloader.PVCNameForModelCache(resourceName)
+		Expect(k8sClient.Status().Update(ctx, mc)).To(Succeed())
+
+		pod := podRequestingModelCache(namespace, resourceName)
+		Expect(k8sClient.Create(ctx, pod)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, pod) })
+
+		controllerReconciler := &ModelCacheReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+		_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+		Expect(err).NotTo(HaveOccurred())
+
+		createdPVC := &corev1.PersistentVolumeClaim{}
+		Eventually(func() error {
+			return k8sClient.Get(ctx, types.NamespacedName{Name: downloader.PVCNameForModelCache(resourceName), Namespace: namespace}, createdPVC)
+		}).Should(Succeed())
+
+		Expect(k8sClient.Get(ctx, typeNamespacedName, mc)).To(Succeed())
+		Expect(mc.Status.Phase).To(Equal(praestov1alpha1.ModelCachePhasePending))
+	})
+
 	It("creates cluster-scoped ModelCacheNodes with logical ModelCache references", func() {
 		localModelCacheName := fmt.Sprintf("node-cache-%s", rand.String(8))
 		localModelCacheKey := types.NamespacedName{Name: localModelCacheName, Namespace: namespace}
@@ -426,6 +491,24 @@ func markModelCacheReady(ctx context.Context, key types.NamespacedName, pvcName 
 	mc.Status.DownloadJobName = downloader.JobNameForModelCache(mc.Name)
 	Expect(k8sClient.Status().Update(ctx, mc)).To(Succeed())
 	return mc
+}
+
+func podRequestingModelCache(namespace, modelCacheName string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("consumer-%s", rand.String(8)),
+			Namespace: namespace,
+			Labels: map[string]string{
+				usesModelCacheLabelKey: "true",
+			},
+			Annotations: map[string]string{
+				modelMountsAnnotationKey: fmt.Sprintf(`[{"modelCache":"%s","mountPath":"/models"}]`, modelCacheName),
+			},
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "app", Image: "busybox:1.36"}},
+		},
+	}
 }
 
 func pvcReadyConditionReason(conditions []metav1.Condition) string {
