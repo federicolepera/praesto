@@ -135,17 +135,17 @@ Pin release images explicitly:
 helm install praesto ./charts/praesto \
   --namespace praesto-system \
   --create-namespace \
-  --set image.tag=0.6.0 \
-  --set downloader.image.tag=0.6.0 \
-  --set csi.image.tag=0.6.0 \
-  --set nodeAgent.image.tag=0.6.0
+  --set image.tag=0.6.1 \
+  --set downloader.image.tag=0.6.1 \
+  --set csi.image.tag=0.6.1 \
+  --set nodeAgent.image.tag=0.6.1
 ```
 
 The chart can also be published and installed as an OCI Helm package from GHCR:
 
 ```bash
 helm install praesto oci://ghcr.io/federicolepera/praesto/charts/praesto \
-  --version 0.6.0 \
+  --version 0.6.1 \
   --namespace praesto-system \
   --create-namespace
 ```
