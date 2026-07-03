@@ -15,8 +15,10 @@ spec:
       labels:
         app: praesto-csi-webhook-test
       annotations:
-        praesto.io/model-cache: tinyllama-test
-        praesto.io/model-mount-path: /model
+        praesto.io/model-mounts: |
+          [
+            {"modelCache":"tinyllama-test","mountPath":"/model"}
+          ]
         praesto.io/target-container: shell
     spec:
       containers:

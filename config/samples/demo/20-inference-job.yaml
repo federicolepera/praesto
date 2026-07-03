@@ -13,8 +13,10 @@ spec:
       labels:
         app.kubernetes.io/name: smollm2-inference
       annotations:
-        praesto.io/model-cache: smollm2-demo
-        praesto.io/model-mount-path: /model
+        praesto.io/model-mounts: |
+          [
+            {"modelCache":"smollm2-demo","mountPath":"/model"}
+          ]
         praesto.io/target-container: infer
     spec:
       restartPolicy: Never

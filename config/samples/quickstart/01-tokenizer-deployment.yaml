@@ -13,8 +13,10 @@ spec:
       labels:
         app: praesto-tokenizer-test
       annotations:
-        praesto.io/model-cache: tinyllama-test
-        praesto.io/model-mount-path: /models
+        praesto.io/model-mounts: |
+          [
+            {"modelCache":"tinyllama-test","mountPath":"/models"}
+          ]
     spec:
       containers:
       - name: tokenizer-test
