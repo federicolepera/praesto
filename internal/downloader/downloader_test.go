@@ -148,6 +148,9 @@ func TestDownloadJobForModelCache(t *testing.T) {
 	if job.Spec.BackoffLimit == nil || *job.Spec.BackoffLimit != 3 {
 		t.Fatalf("unexpected backoff limit: %#v", job.Spec.BackoffLimit)
 	}
+	if job.Spec.TTLSecondsAfterFinished == nil || *job.Spec.TTLSecondsAfterFinished != DefaultDownloadJobTTLSecondsAfterFinished {
+		t.Fatalf("unexpected TTL after finished: %#v", job.Spec.TTLSecondsAfterFinished)
+	}
 	if job.Spec.Template.Spec.RestartPolicy != corev1.RestartPolicyOnFailure {
 		t.Fatalf("unexpected restart policy: %s", job.Spec.Template.Spec.RestartPolicy)
 	}
@@ -207,6 +210,9 @@ func TestDownloadJobForModelCacheNode(t *testing.T) {
 	if job.Spec.Template.Spec.NodeName != modelCacheNode.Spec.NodeName {
 		t.Fatalf("expected Job nodeName %s, got %s", modelCacheNode.Spec.NodeName, job.Spec.Template.Spec.NodeName)
 	}
+	if job.Spec.TTLSecondsAfterFinished == nil || *job.Spec.TTLSecondsAfterFinished != DefaultDownloadJobTTLSecondsAfterFinished {
+		t.Fatalf("unexpected TTL after finished: %#v", job.Spec.TTLSecondsAfterFinished)
+	}
 	assertLabels(t, job.Labels, DownloadJobLabels(modelCacheNode.Name))
 
 	container := job.Spec.Template.Spec.Containers[0]
@@ -235,7 +241,7 @@ func TestGeneratedIdentifiersFitKubernetesLabelLimits(t *testing.T) {
 	for label, name := range map[string]string{
 		"pvc":            PVCNameForModelCache(longName),
 		"pv":             PVNameForModelCacheNode(longNode, longName),
-		"legacy job":     JobNameForModelCache(longName),
+		"PVC job":        JobNameForModelCache(longName),
 		"per-node job":   JobNameForModelCacheNode(longName),
 		"model label":    ModelCacheLabels(longName)[ModelLabelKey],
 		"download label": DownloadJobLabels(longName)[ModelLabelKey],

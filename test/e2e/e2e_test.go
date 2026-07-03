@@ -519,8 +519,10 @@ metadata:
   name: %s
   namespace: %s
   annotations:
-    praesto.io/model-cache: %s
-    praesto.io/model-mount-path: /models
+    praesto.io/model-mounts: |
+      [
+        {"modelCache":"%s","mountPath":"/models"}
+      ]
 spec:
   restartPolicy: Never
   containers:
@@ -548,8 +550,10 @@ metadata:
   name: single-container-consumer
   namespace: %s
   annotations:
-    praesto.io/model-cache: %s
-    praesto.io/model-mount-path: /models
+    praesto.io/model-mounts: |
+      [
+        {"modelCache":"%s","mountPath":"/models"}
+      ]
 spec:
   containers:
   - name: app
@@ -585,8 +589,10 @@ metadata:
   name: target-container-consumer
   namespace: %s
   annotations:
-    praesto.io/model-cache: %s
-    praesto.io/model-mount-path: /models
+    praesto.io/model-mounts: |
+      [
+        {"modelCache":"%s","mountPath":"/models"}
+      ]
     praesto.io/target-container: app
 spec:
   containers:
@@ -620,8 +626,10 @@ metadata:
   name: no-injection-consumer
   namespace: %s
   annotations:
-    praesto.io/model-cache: missing-cache
-    praesto.io/model-mount-path: /models
+    praesto.io/model-mounts: |
+      [
+        {"modelCache":"missing-cache","mountPath":"/models"}
+      ]
 spec:
   containers:
   - name: app

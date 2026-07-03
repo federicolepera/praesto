@@ -40,14 +40,14 @@ func TestPodMutatorHandle(t *testing.T) {
 		}
 	})
 
-	t.Run("rejects empty model cache annotation", func(t *testing.T) {
+	t.Run("rejects empty model mounts annotation", func(t *testing.T) {
 		mutator := newTestPodMutator(t, scheme)
 		pod := podWithContainers("app")
-		pod.Annotations = map[string]string{ModelAnnotationKey: "   "}
+		pod.Annotations = map[string]string{ModelMountsAnnotationKey: "   "}
 
 		resp, _ := handlePod(t, mutator, pod)
 
-		assertRejected(t, resp, "model cache annotation is empty")
+		assertRejected(t, resp, "model mounts annotation is empty")
 	})
 
 	t.Run("rejects missing model cache", func(t *testing.T) {
@@ -69,6 +69,7 @@ func TestPodMutatorHandle(t *testing.T) {
 		assertModelCSIVolume(t, mutatedPod, "default", "tinyllama-test")
 		assertAppContainerMount(t, mutatedPod, DefaultModelMountPath)
 		assertUsesModelCacheLabel(t, mutatedPod)
+		assertNoWaitInitContainer(t, mutatedPod)
 	})
 
 	t.Run("rejects local model cache that failed", func(t *testing.T) {
@@ -80,8 +81,8 @@ func TestPodMutatorHandle(t *testing.T) {
 		assertRejected(t, resp, "is failed")
 	})
 
-	t.Run("rejects legacy model cache that is not ready", func(t *testing.T) {
-		mutator := newTestPodMutator(t, scheme, legacyModelCacheWithStatus(praestov1alpha1.ModelCachePhasePending, "praesto-tinyllama"))
+	t.Run("rejects PVC model cache that is not ready", func(t *testing.T) {
+		mutator := newTestPodMutator(t, scheme, pvcModelCacheWithStatus(praestov1alpha1.ModelCachePhasePending, "praesto-tinyllama"))
 		pod := annotatedPod(podWithContainers("app"))
 
 		resp, _ := handlePod(t, mutator, pod)
@@ -89,13 +90,16 @@ func TestPodMutatorHandle(t *testing.T) {
 		assertRejected(t, resp, "is not ready")
 	})
 
-	t.Run("rejects legacy ready model cache without PVC", func(t *testing.T) {
-		mutator := newTestPodMutator(t, scheme, legacyModelCacheWithStatus(praestov1alpha1.ModelCachePhaseReady, ""))
+	t.Run("mounts evicted PVC model cache with deterministic PVC name", func(t *testing.T) {
+		mutator := newTestPodMutator(t, scheme, pvcModelCacheWithStatus(praestov1alpha1.ModelCachePhaseEvicted, ""))
 		pod := annotatedPod(podWithContainers("app"))
 
-		resp, _ := handlePod(t, mutator, pod)
+		resp, mutatedPod := handlePod(t, mutator, pod)
 
-		assertRejected(t, resp, "does not have a PVC")
+		assertAllowed(t, resp)
+		assertModelPVCVolume(t, mutatedPod, "praesto-tinyllama-test")
+		assertAppContainerMount(t, mutatedPod, DefaultModelMountPath)
+		assertWaitInitContainer(t, mutatedPod, testModelCacheVolumeName, DefaultModelMountPath)
 	})
 
 	t.Run("rejects annotated pod without containers", func(t *testing.T) {
@@ -119,8 +123,8 @@ func TestPodMutatorHandle(t *testing.T) {
 		assertUsesModelCacheLabel(t, mutatedPod)
 	})
 
-	t.Run("mounts legacy ready model cache as a PVC volume", func(t *testing.T) {
-		mutator := newTestPodMutator(t, scheme, legacyReadyModelCache())
+	t.Run("mounts PVC ready model cache as a PVC volume", func(t *testing.T) {
+		mutator := newTestPodMutator(t, scheme, pvcReadyModelCache())
 		pod := annotatedPod(podWithContainers("app"))
 
 		resp, mutatedPod := handlePod(t, mutator, pod)
@@ -129,6 +133,7 @@ func TestPodMutatorHandle(t *testing.T) {
 		assertModelPVCVolume(t, mutatedPod, "praesto-tinyllama")
 		assertAppContainerMount(t, mutatedPod, DefaultModelMountPath)
 		assertUsesModelCacheLabel(t, mutatedPod)
+		assertWaitInitContainer(t, mutatedPod, testModelCacheVolumeName, DefaultModelMountPath)
 	})
 
 	t.Run("mounts multiple local ready model caches as CSI volumes", func(t *testing.T) {
@@ -158,10 +163,10 @@ func TestPodMutatorHandle(t *testing.T) {
 		assertUsesModelCacheLabel(t, mutatedPod)
 	})
 
-	t.Run("mounts multiple legacy model caches as PVC volumes", func(t *testing.T) {
+	t.Run("mounts multiple PVC model caches as PVC volumes", func(t *testing.T) {
 		mutator := newTestPodMutator(t, scheme,
-			namedLegacyReadyModelCache("bert-v1", "praesto-bert-v1"),
-			namedLegacyReadyModelCache("bert-v2", "praesto-bert-v2"),
+			namedPVCReadyModelCache("bert-v1", "praesto-bert-v1"),
+			namedPVCReadyModelCache("bert-v2", "praesto-bert-v2"),
 		)
 		pod := podWithContainers("openvino")
 		pod.Annotations = map[string]string{
@@ -178,16 +183,8 @@ func TestPodMutatorHandle(t *testing.T) {
 		assertModelPVCVolumeNamed(t, mutatedPod, "praesto-model-cache-1", "praesto-bert-v2")
 		assertContainerMountNamed(t, mutatedPod, "openvino", "praesto-model-cache-0", "/models/bert/1")
 		assertContainerMountNamed(t, mutatedPod, "openvino", "praesto-model-cache-1", "/models/bert/2")
-	})
-
-	t.Run("rejects single and multi model annotations together", func(t *testing.T) {
-		mutator := newTestPodMutator(t, scheme, readyModelCache())
-		pod := annotatedPod(podWithContainers("app"))
-		pod.Annotations[ModelMountsAnnotationKey] = `[{"modelCache":"tinyllama-test","mountPath":"/models/tinyllama/1"}]`
-
-		resp, _ := handlePod(t, mutator, pod)
-
-		assertRejected(t, resp, "cannot be used together")
+		assertWaitInitContainer(t, mutatedPod, "praesto-model-cache-0", "/models/bert/1")
+		assertWaitInitContainer(t, mutatedPod, "praesto-model-cache-1", "/models/bert/2")
 	})
 
 	t.Run("rejects invalid multi model mount path", func(t *testing.T) {
@@ -234,8 +231,8 @@ func TestPodMutatorHandle(t *testing.T) {
 
 	t.Run("uses custom mount path", func(t *testing.T) {
 		mutator := newTestPodMutator(t, scheme, readyModelCache())
-		pod := annotatedPod(podWithContainers("app"))
-		pod.Annotations[ModelPathAnnotationKey] = " /mnt/model "
+		pod := podWithContainers("app")
+		pod.Annotations = map[string]string{ModelMountsAnnotationKey: `[{"modelCache":"tinyllama-test","mountPath":"/mnt/model"}]`}
 
 		resp, mutatedPod := handlePod(t, mutator, pod)
 
@@ -399,12 +396,12 @@ func namedReadyModelCache(name string) *praestov1alpha1.ModelCache {
 	return modelCache
 }
 
-func legacyReadyModelCache() *praestov1alpha1.ModelCache {
-	return legacyModelCacheWithStatus(praestov1alpha1.ModelCachePhaseReady, "praesto-tinyllama")
+func pvcReadyModelCache() *praestov1alpha1.ModelCache {
+	return pvcModelCacheWithStatus(praestov1alpha1.ModelCachePhaseReady, "praesto-tinyllama")
 }
 
-func namedLegacyReadyModelCache(name, pvcName string) *praestov1alpha1.ModelCache {
-	modelCache := legacyModelCacheWithStatus(praestov1alpha1.ModelCachePhaseReady, pvcName)
+func namedPVCReadyModelCache(name, pvcName string) *praestov1alpha1.ModelCache {
+	modelCache := pvcModelCacheWithStatus(praestov1alpha1.ModelCachePhaseReady, pvcName)
 	modelCache.Name = name
 	return modelCache
 }
@@ -422,7 +419,7 @@ func modelCacheWithStatus(phase, pvcName string) *praestov1alpha1.ModelCache {
 	}
 }
 
-func legacyModelCacheWithStatus(phase, pvcName string) *praestov1alpha1.ModelCache {
+func pvcModelCacheWithStatus(phase, pvcName string) *praestov1alpha1.ModelCache {
 	modelCache := modelCacheWithStatus(phase, pvcName)
 	modelCache.Spec.Storage.StorageClassName = "standard"
 	return modelCache
@@ -446,7 +443,7 @@ func podWithContainers(containerNames ...string) *corev1.Pod {
 }
 
 func annotatedPod(pod *corev1.Pod) *corev1.Pod {
-	pod.Annotations = map[string]string{ModelAnnotationKey: "tinyllama-test"}
+	pod.Annotations = map[string]string{ModelMountsAnnotationKey: `[{"modelCache":"tinyllama-test","mountPath":"/models"}]`}
 	return pod
 }
 
@@ -508,6 +505,36 @@ func assertUsesModelCacheLabel(t *testing.T, pod *corev1.Pod) {
 	if pod.Labels[UsesModelCacheLabelKey] != "true" {
 		t.Fatalf("expected label %s=true, got %#v", UsesModelCacheLabelKey, pod.Labels)
 	}
+}
+
+func assertNoWaitInitContainer(t *testing.T, pod *corev1.Pod) {
+	t.Helper()
+	if len(pod.Spec.InitContainers) != 0 {
+		t.Fatalf("expected no wait init containers, got %#v", pod.Spec.InitContainers)
+	}
+}
+
+func assertWaitInitContainer(t *testing.T, pod *corev1.Pod, volumeName, mountPath string) {
+	t.Helper()
+	containerName := waitForCacheContainerName(volumeName)
+	for _, container := range pod.Spec.InitContainers {
+		if container.Name != containerName {
+			continue
+		}
+		if container.Image != WaitForCacheImage {
+			t.Fatalf("unexpected wait init image: %s", container.Image)
+		}
+		if !strings.Contains(strings.Join(container.Command, " "), mountPath+"/.praesto-complete") {
+			t.Fatalf("expected wait command to check %s/.praesto-complete, got %#v", mountPath, container.Command)
+		}
+		for _, mount := range container.VolumeMounts {
+			if mount.Name == volumeName && mount.MountPath == mountPath && mount.ReadOnly {
+				return
+			}
+		}
+		t.Fatalf("expected wait init container %s to mount volume %s at %s, got %#v", containerName, volumeName, mountPath, container.VolumeMounts)
+	}
+	t.Fatalf("expected wait init container %s, got %#v", containerName, pod.Spec.InitContainers)
 }
 
 func assertModelPVCVolume(t *testing.T, pod *corev1.Pod, pvcName string) {

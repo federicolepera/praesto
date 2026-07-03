@@ -9,21 +9,22 @@ import (
 	"strings"
 
 	praestov1alpha1 "github.com/federicolepera/praesto/api/v1alpha1"
+	"github.com/federicolepera/praesto/internal/downloader"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
 const (
-	ModelAnnotationKey       = "praesto.io/model-cache"
-	ModelPathAnnotationKey   = "praesto.io/model-mount-path"
 	ModelMountsAnnotationKey = "praesto.io/model-mounts"
 	ModelContainerNameKey    = "praesto.io/target-container"
 	UsesModelCacheLabelKey   = "praesto.io/uses-model-cache"
 	DefaultModelMountPath    = "/models"
+	WaitForCacheImage        = "busybox:1.36"
 
 	ModelCacheVolumeName             = "praesto-model-cache"
 	ModelCacheVolumeNamePrefix       = "praesto-model-cache-"
+	WaitForCacheContainerNamePrefix  = "praesto-wait-model-cache-"
 	PraestoCSIDriverName             = "csi.praesto.io"
 	CSIVolumeAttributeModelNamespace = "modelCacheNamespace"
 	CSIVolumeAttributeModelCacheName = "modelCacheName"
@@ -70,6 +71,9 @@ func (m *PodMutator) Handle(ctx context.Context, req admission.Request) admissio
 			return admission.Errored(400, err)
 		}
 	}
+	if err := ensurePVCModelCacheWaitInitContainers(pod, modelMounts); err != nil {
+		return admission.Errored(400, err)
+	}
 
 	targetContainerName, hasTargetContainerAnnotation := pod.Annotations[ModelContainerNameKey]
 	targetContainerName = strings.TrimSpace(targetContainerName)
@@ -113,39 +117,13 @@ func ensureUsesModelCacheLabel(pod *corev1.Pod) {
 
 func (m *PodMutator) resolveModelMounts(ctx context.Context, pod *corev1.Pod) ([]resolvedModelMount, error) {
 	annotations := pod.GetAnnotations()
-	modelCacheName, hasModelCacheAnnotation := annotations[ModelAnnotationKey]
 	modelMountsJSON, hasModelMountsAnnotation := annotations[ModelMountsAnnotationKey]
 
-	if hasModelCacheAnnotation && hasModelMountsAnnotation {
-		return nil, fmt.Errorf("%s and %s cannot be used together", ModelAnnotationKey, ModelMountsAnnotationKey)
-	}
 	if hasModelMountsAnnotation {
 		return m.resolveMultiModelMounts(ctx, pod.Namespace, modelMountsJSON)
 	}
-	if !hasModelCacheAnnotation {
-		return nil, nil
-	}
 
-	modelCacheName = strings.TrimSpace(modelCacheName)
-	if modelCacheName == "" {
-		return nil, fmt.Errorf("model cache annotation is empty")
-	}
-
-	modelMountPath := strings.TrimSpace(annotations[ModelPathAnnotationKey])
-	if modelMountPath == "" {
-		modelMountPath = DefaultModelMountPath
-	}
-	modelMountPath, err := cleanMountPath(modelMountPath)
-	if err != nil {
-		return nil, err
-	}
-
-	modelCache, err := m.fetchInjectableModelCache(ctx, pod.Namespace, modelCacheName)
-	if err != nil {
-		return nil, err
-	}
-
-	return []resolvedModelMount{{modelCache: modelCache, mountPath: modelMountPath, volumeName: ModelCacheVolumeName}}, nil
+	return nil, nil
 }
 
 func (m *PodMutator) resolveMultiModelMounts(ctx context.Context, namespace, annotationValue string) ([]resolvedModelMount, error) {
@@ -184,10 +162,14 @@ func (m *PodMutator) resolveMultiModelMounts(ctx context.Context, namespace, ann
 			return nil, err
 		}
 
+		volumeName := ModelCacheVolumeName
+		if len(requestedMounts) > 1 {
+			volumeName = fmt.Sprintf("%s%d", ModelCacheVolumeNamePrefix, i)
+		}
 		modelMounts = append(modelMounts, resolvedModelMount{
 			modelCache: modelCache,
 			mountPath:  mountPath,
-			volumeName: fmt.Sprintf("%s%d", ModelCacheVolumeNamePrefix, i),
+			volumeName: volumeName,
 		})
 	}
 
@@ -208,7 +190,7 @@ func (m *PodMutator) fetchInjectableModelCache(ctx context.Context, namespace, n
 		}
 		return modelCache, nil
 	}
-	if modelCache.Status.Phase != praestov1alpha1.ModelCachePhaseReady {
+	if modelCache.Status.Phase != praestov1alpha1.ModelCachePhaseReady && modelCache.Status.Phase != praestov1alpha1.ModelCachePhaseEvicted {
 		return nil, fmt.Errorf("model cache %s is not ready", name)
 	}
 	return modelCache, nil
@@ -294,7 +276,7 @@ func ensureModelCacheCSIVolume(pod *corev1.Pod, volumeName string, modelCache *p
 func ensureModelCachePVCVolume(pod *corev1.Pod, volumeName string, modelCache *praestov1alpha1.ModelCache) error {
 	pvcName := modelCache.Status.PvcName
 	if pvcName == "" {
-		return fmt.Errorf("model cache %s does not have a PVC associated yet", modelCache.Name)
+		pvcName = downloader.PVCNameForModelCache(modelCache.Name)
 	}
 
 	for _, volume := range pod.Spec.Volumes {
@@ -319,6 +301,75 @@ func ensureModelCachePVCVolume(pod *corev1.Pod, volumeName string, modelCache *p
 		},
 	})
 	return nil
+}
+
+func ensurePVCModelCacheWaitInitContainers(pod *corev1.Pod, modelMounts []resolvedModelMount) error {
+	for _, modelMount := range modelMounts {
+		if usesCSIVolume(modelMount.modelCache) {
+			continue
+		}
+		if err := ensurePVCModelCacheWaitInitContainer(pod, modelMount); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ensurePVCModelCacheWaitInitContainer(pod *corev1.Pod, modelMount resolvedModelMount) error {
+	containerName := waitForCacheContainerName(modelMount.volumeName)
+	command := []string{"sh", "-c", fmt.Sprintf("until [ -f %s/.praesto-complete ]; do echo waiting for Praesto model cache %s; sleep 2; done", modelMount.mountPath, modelMount.modelCache.Name)}
+	mount := corev1.VolumeMount{Name: modelMount.volumeName, MountPath: modelMount.mountPath, ReadOnly: true}
+
+	for i, container := range pod.Spec.InitContainers {
+		if container.Name != containerName {
+			continue
+		}
+		if container.Image != WaitForCacheImage || !stringSlicesEqual(container.Command, command) || !volumeMountsContain(container.VolumeMounts, mount) {
+			return fmt.Errorf("init container %s already exists with a conflicting configuration", containerName)
+		}
+		pod.Spec.InitContainers[i].VolumeMounts = appendMissingVolumeMount(pod.Spec.InitContainers[i].VolumeMounts, mount)
+		return nil
+	}
+
+	pod.Spec.InitContainers = append(pod.Spec.InitContainers, corev1.Container{
+		Name:         containerName,
+		Image:        WaitForCacheImage,
+		Command:      command,
+		VolumeMounts: []corev1.VolumeMount{mount},
+	})
+	return nil
+}
+
+func waitForCacheContainerName(volumeName string) string {
+	return strings.TrimSuffix(WaitForCacheContainerNamePrefix+volumeName, "-")
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func volumeMountsContain(mounts []corev1.VolumeMount, expected corev1.VolumeMount) bool {
+	for _, mount := range mounts {
+		if mount.Name == expected.Name && mount.MountPath == expected.MountPath && mount.ReadOnly == expected.ReadOnly {
+			return true
+		}
+	}
+	return false
+}
+
+func appendMissingVolumeMount(mounts []corev1.VolumeMount, mount corev1.VolumeMount) []corev1.VolumeMount {
+	if volumeMountsContain(mounts, mount) {
+		return mounts
+	}
+	return append(mounts, mount)
 }
 
 func boolPtr(value bool) *bool {
