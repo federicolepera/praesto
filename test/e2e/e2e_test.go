@@ -509,6 +509,12 @@ spec:
 			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "downloader Job should complete")
 
+			By("verifying the downloader Job is configured for TTL cleanup")
+			cmd = exec.Command("kubectl", "get", "job", realDownloadJobName, "-n", workloadNamespace, "-o", "jsonpath={.spec.ttlSecondsAfterFinished}")
+			ttlSeconds, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ttlSeconds).To(Equal("60"))
+
 			ensureRealDownloadCacheReady()
 
 			By("creating a consumer Pod that reads a downloaded file from the injected volume")
@@ -537,6 +543,13 @@ spec:
 				phase := kubectlJSONPath(g, "pod", consumerPod, workloadNamespace, `{.status.phase}`)
 				g.Expect(phase).To(Equal("Succeeded"))
 			}, 2*time.Minute).Should(Succeed())
+
+			By("verifying the completed downloader Job is cleaned up by its TTL")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "job", realDownloadJobName, "-n", workloadNamespace)
+				_, err := utils.Run(cmd)
+				g.Expect(err).To(HaveOccurred())
+			}, 3*time.Minute).Should(Succeed())
 		})
 
 		It("should inject a ready ModelCache volume into an annotated Pod", func() {
@@ -568,6 +581,9 @@ spec:
 					fmt.Sprintf(`{.spec.volumes[?(@.name=="%s")].persistentVolumeClaim.claimName}`, modelCacheVolumeName))
 				g.Expect(claimName).To(Equal(realDownloadPVCName))
 
+				usesModelCacheLabel := kubectlJSONPath(g, "pod", "single-container-consumer", workloadNamespace, `{.metadata.labels.praesto\.io/uses-model-cache}`)
+				g.Expect(usesModelCacheLabel).To(Equal("true"))
+
 				mountPath := kubectlJSONPath(g, "pod", "single-container-consumer", workloadNamespace,
 					fmt.Sprintf(`{.spec.containers[0].volumeMounts[?(@.name=="%s")].mountPath}`, modelCacheVolumeName))
 				g.Expect(mountPath).To(Equal("/models"))
@@ -575,7 +591,118 @@ spec:
 				readOnly := kubectlJSONPath(g, "pod", "single-container-consumer", workloadNamespace,
 					fmt.Sprintf(`{.spec.containers[0].volumeMounts[?(@.name=="%s")].readOnly}`, modelCacheVolumeName))
 				g.Expect(readOnly).To(Equal("true"))
+
+				waitInitMountPath := kubectlJSONPath(g, "pod", "single-container-consumer", workloadNamespace,
+					fmt.Sprintf(`{.spec.initContainers[?(@.name=="praesto-wait-model-cache-%s")].volumeMounts[?(@.name=="%s")].mountPath}`, modelCacheVolumeName, modelCacheVolumeName))
+				g.Expect(waitInitMountPath).To(Equal("/models"))
+
+				waitInitCommand := kubectlJSONPath(g, "pod", "single-container-consumer", workloadNamespace,
+					fmt.Sprintf(`{.spec.initContainers[?(@.name=="praesto-wait-model-cache-%s")].command}`, modelCacheVolumeName))
+				g.Expect(waitInitCommand).To(ContainSubstring("/models/.praesto-complete"))
 			}).Should(Succeed())
+		})
+
+		It("should ignore removed single-model annotations", func() {
+			ensureRealDownloadCacheReady()
+
+			By("creating a Pod with removed single-model annotations")
+			_, err := kubectlApplyYAML(fmt.Sprintf(`
+apiVersion: v1
+kind: Pod
+metadata:
+  name: removed-annotation-consumer
+  namespace: %s
+  annotations:
+    praesto.io/model-cache: %s
+    praesto.io/model-mount-path: /models
+spec:
+  containers:
+  - name: app
+    image: busybox:1.36
+    command: ["sh", "-c", "sleep 3600"]
+`, workloadNamespace, realDownloadModelCacheName))
+			Expect(err).NotTo(HaveOccurred(), "Pod with removed annotations should be admitted but not mutated")
+
+			By("verifying Praesto did not inject a volume")
+			Eventually(func(g Gomega) {
+				claimName := kubectlJSONPath(g, "pod", "removed-annotation-consumer", workloadNamespace,
+					fmt.Sprintf(`{.spec.volumes[?(@.name=="%s")].persistentVolumeClaim.claimName}`, modelCacheVolumeName))
+				g.Expect(claimName).To(BeEmpty())
+			}).Should(Succeed())
+		})
+
+		It("should rehydrate an evicted PVC ModelCache when a Pod requests it", func() {
+			const rehydrateModelCacheName = "rehydrate-pvc-cache"
+			const rehydratePodName = "rehydrate-pvc-consumer"
+			const rehydratePVCName = "praesto-rehydrate-pvc-cache"
+
+			By("creating an evicted PVC ModelCache")
+			_, err := kubectlApplyYAML(fmt.Sprintf(`
+apiVersion: praesto.praesto.io/v1alpha1
+kind: ModelCache
+metadata:
+  name: %s
+  namespace: %s
+spec:
+  source:
+    huggingface:
+      repo: hf-internal-testing/tiny-random-bert
+      revision: main
+  storage:
+    storageClassName: standard
+    size: 1Gi
+  downloader:
+    image: %s
+`, rehydrateModelCacheName, workloadNamespace, downloaderImage))
+			Expect(err).NotTo(HaveOccurred(), "rehydration ModelCache should be accepted")
+
+			cmd := exec.Command("kubectl", "patch", "modelcache", rehydrateModelCacheName,
+				"-n", workloadNamespace,
+				"--subresource=status",
+				"--type=merge",
+				"-p", fmt.Sprintf(`{"status":{"phase":"Evicted","pvcName":"%s"}}`, rehydratePVCName))
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "ModelCache status should be patched to Evicted")
+
+			By("creating a consumer Pod that requests the evicted ModelCache")
+			_, err = kubectlApplyYAML(fmt.Sprintf(`
+apiVersion: v1
+kind: Pod
+metadata:
+  name: %s
+  namespace: %s
+  annotations:
+    praesto.io/model-mounts: |
+      [
+        {"modelCache":"%s","mountPath":"/models"}
+      ]
+spec:
+  containers:
+  - name: app
+    image: busybox:1.36
+    command: ["sh", "-c", "test -f /models/.praesto-complete"]
+`, rehydratePodName, workloadNamespace, rehydrateModelCacheName))
+			Expect(err).NotTo(HaveOccurred(), "consumer Pod should be admitted and mutated")
+
+			By("verifying the Pod waits for the PVC cache completion marker")
+			Eventually(func(g Gomega) {
+				claimName := kubectlJSONPath(g, "pod", rehydratePodName, workloadNamespace,
+					fmt.Sprintf(`{.spec.volumes[?(@.name=="%s")].persistentVolumeClaim.claimName}`, modelCacheVolumeName))
+				g.Expect(claimName).To(Equal(rehydratePVCName))
+
+				waitInitCommand := kubectlJSONPath(g, "pod", rehydratePodName, workloadNamespace,
+					fmt.Sprintf(`{.spec.initContainers[?(@.name=="praesto-wait-model-cache-%s")].command}`, modelCacheVolumeName))
+				g.Expect(waitInitCommand).To(ContainSubstring("/models/.praesto-complete"))
+			}).Should(Succeed())
+
+			By("verifying the controller recreates the PVC and starts rehydration")
+			Eventually(func(g Gomega) {
+				pvcPhase := kubectlJSONPath(g, "pvc", rehydratePVCName, workloadNamespace, `{.status.phase}`)
+				g.Expect(pvcPhase).NotTo(BeEmpty())
+
+				phase := kubectlJSONPath(g, "modelcache", rehydrateModelCacheName, workloadNamespace, `{.status.phase}`)
+				g.Expect(phase).To(Or(Equal("Pending"), Equal("Downloading"), Equal("Ready")))
+			}, 3*time.Minute).Should(Succeed())
 		})
 
 		It("should inject a ready ModelCache volume only into the selected target container", func() {
