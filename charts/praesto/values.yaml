@@ -5,7 +5,7 @@ namespaceOverride: ""
 
 image:
   repository: ghcr.io/federicolepera/praesto
-  tag: "0.5.0"
+  tag: "0.6.0"
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -83,7 +83,7 @@ rbac:
 downloader:
   image:
     repository: ghcr.io/federicolepera/praesto/downloader
-    tag: "0.5.0"
+    tag: "0.6.0"
 
 localCache:
   basePath: /var/praesto
@@ -94,7 +94,7 @@ csi:
   kubeletRootDir: /var/lib/kubelet
   image:
     repository: ghcr.io/federicolepera/praesto/csi-node-driver
-    tag: "0.5.0"
+    tag: "0.6.0"
     pullPolicy: IfNotPresent
   registrar:
     image:
@@ -123,7 +123,7 @@ nodeAgent:
   enabled: true
   image:
     repository: ghcr.io/federicolepera/praesto/node-agent
-    tag: "0.5.0"
+    tag: "0.6.0"
     pullPolicy: IfNotPresent
   serviceAccount:
     create: true

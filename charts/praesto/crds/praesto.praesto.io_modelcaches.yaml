@@ -287,6 +287,9 @@ spec:
               failedNodes:
                 format: int32
                 type: integer
+              lastUsedTime:
+                format: date-time
+                type: string
               pendingNodes:
                 format: int32
                 type: integer
@@ -296,6 +299,7 @@ spec:
                 - Downloading
                 - Failed
                 - Pending
+                - Evicted
                 type: string
               pvcName:
                 type: string
