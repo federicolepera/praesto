@@ -135,17 +135,17 @@ Pin release images explicitly:
 helm install praesto ./charts/praesto \
   --namespace praesto-system \
   --create-namespace \
-  --set image.tag=0.6.1 \
-  --set downloader.image.tag=0.6.1 \
-  --set csi.image.tag=0.6.1 \
-  --set nodeAgent.image.tag=0.6.1
+  --set image.tag=0.6.2 \
+  --set downloader.image.tag=0.6.2 \
+  --set csi.image.tag=0.6.2 \
+  --set nodeAgent.image.tag=0.6.2
 ```
 
 The chart can also be published and installed as an OCI Helm package from GHCR:
 
 ```bash
 helm install praesto oci://ghcr.io/federicolepera/praesto/charts/praesto \
-  --version 0.6.1 \
+  --version 0.6.2 \
   --namespace praesto-system \
   --create-namespace
 ```
@@ -166,6 +166,17 @@ Praesto supports two storage modes. The mode is selected by `spec.storage.storag
 
 - **Local CSI mode**: the primary mode. Leave `storageClassName` empty. Praesto creates one `ModelCacheNode` per selected node; the node-agent downloads the model into node-local storage; the CSI driver mounts the completed cache into Pods. No PV, PVC, or downloader Job is created for this mode.
 - **Shared PVC mode**: set `storageClassName`. Praesto creates a shared RWX PVC and a downloader Job, then mounts that PVC into Pods. This mode does not use `ModelCacheNode`.
+
+`kubectl get modelcache` shows the same high-level status for both modes:
+
+```text
+NAMESPACE      NAME                    PHASE         MODE   READY   TOTAL   PVC                      DOWNLOAD JOB
+default        tinyllama-test          Downloading   PVC    0       1       praesto-tinyllama-test   praesto-download-tinyllama-test
+praesto-ovms   ovms-distilbert-squad   Ready         Node   1       1
+praesto-ovms   ovms-vit-food101        Ready         Node   1       1
+```
+
+`MODE` identifies the backend used by the cache. `READY` and `TOTAL` summarize cache readiness across the logical cache units: `1/1` for shared PVC mode and one unit per selected node for local CSI mode. `PVC` and `DOWNLOAD JOB` are populated only for shared PVC mode.
 
 Minimal local CSI `ModelCache`:
 

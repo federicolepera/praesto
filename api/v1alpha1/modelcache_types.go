@@ -128,10 +128,17 @@ const (
 	ModelCachePhaseEvicted     = "Evicted"
 )
 
+const (
+	ModelCacheModePVC  = "PVC"
+	ModelCacheModeNode = "Node"
+)
+
 // ModelCacheStatus defines the observed state of ModelCache.
 type ModelCacheStatus struct {
 	// +kubebuilder:validation:Enum=Ready;Downloading;Failed;Pending;Evicted
 	Phase string `json:"phase,omitempty"`
+	// +kubebuilder:validation:Enum=PVC;Node
+	Mode string `json:"mode,omitempty"`
 
 	PvcName         string      `json:"pvcName,omitempty"`
 	DownloadJobName string      `json:"downloadJobName,omitempty"`
@@ -154,6 +161,9 @@ type ModelCacheStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Mode",type=string,JSONPath=`.status.mode`
+// +kubebuilder:printcolumn:name="Ready",type=integer,JSONPath=`.status.readyNodes`
+// +kubebuilder:printcolumn:name="Total",type=integer,JSONPath=`.status.totalNodes`
 // +kubebuilder:printcolumn:name="PVC",type=string,JSONPath=`.status.pvcName`
 // +kubebuilder:printcolumn:name="Download Job",type=string,JSONPath=`.status.downloadJobName`
 

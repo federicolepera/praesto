@@ -40,6 +40,13 @@ Watch the lifecycle:
 kubectl get modelcache tinyllama-test -w
 ```
 
+Shared PVC mode reports `MODE=PVC` and a single cache unit:
+
+```text
+NAME             PHASE         MODE   READY   TOTAL   PVC                      DOWNLOAD JOB
+tinyllama-test   Downloading   PVC    0       1       praesto-tinyllama-test   praesto-download-tinyllama-test
+```
+
 Inspect the generated PVC and Job:
 
 ```bash

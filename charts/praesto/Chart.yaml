@@ -2,8 +2,8 @@ apiVersion: v2
 name: praesto
 description: Praesto Kubernetes operator for model cache lifecycle and Pod injection
 type: application
-version: 0.6.0
-appVersion: "0.6.0"
+version: 0.6.2
+appVersion: "0.6.2"
 keywords:
   - kubernetes
   - operator
