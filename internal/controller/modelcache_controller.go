@@ -345,8 +345,8 @@ func setPVCModelCacheStatusSummary(modelCache *praestov1alpha1.ModelCache) bool 
 	)
 }
 
-func setNodeModelCacheStatusSummary(modelCache *praestov1alpha1.ModelCache, totalNodes, readyNodes, downloadingNodes, failedNodes, pendingNodes int32) bool {
-	return setModelCacheStatusSummary(modelCache, praestov1alpha1.ModelCacheModeNode, totalNodes, readyNodes, downloadingNodes, failedNodes, pendingNodes)
+func setNodeModelCacheStatusSummary(modelCache *praestov1alpha1.ModelCache, totalNodes, readyNodes, downloadingNodes, failedNodes, pendingNodes int32) {
+	setModelCacheStatusSummary(modelCache, praestov1alpha1.ModelCacheModeNode, totalNodes, readyNodes, downloadingNodes, failedNodes, pendingNodes)
 }
 
 func setModelCacheStatusSummary(modelCache *praestov1alpha1.ModelCache, mode string, totalNodes, readyNodes, downloadingNodes, failedNodes, pendingNodes int32) bool {
