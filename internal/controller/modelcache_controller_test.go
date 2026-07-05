@@ -271,6 +271,56 @@ var _ = Describe("ModelCache Controller", func() {
 		Expect(k8sClient.Update(ctx, terminatingPVC)).To(Succeed())
 	})
 
+	It("updates PVC status summary for a ready ModelCache", func() {
+		mc := &praestov1alpha1.ModelCache{}
+		Expect(k8sClient.Get(ctx, typeNamespacedName, mc)).To(Succeed())
+		mc.Status.Phase = praestov1alpha1.ModelCachePhaseReady
+		Expect(setPVCModelCacheStatusSummary(mc)).To(BeTrue())
+		Expect(mc.Status.Mode).To(Equal(praestov1alpha1.ModelCacheModePVC))
+		Expect(mc.Status.TotalNodes).To(Equal(int32(1)))
+		Expect(mc.Status.ReadyNodes).To(Equal(int32(1)))
+		Expect(mc.Status.DownloadingNodes).To(Equal(int32(0)))
+		Expect(mc.Status.FailedNodes).To(Equal(int32(0)))
+		Expect(mc.Status.PendingNodes).To(Equal(int32(0)))
+	})
+
+	DescribeTable("updates PVC status summary for non-ready phases",
+		func(phase string) {
+			mc := &praestov1alpha1.ModelCache{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, mc)).To(Succeed())
+			mc.Status.Phase = phase
+			Expect(setPVCModelCacheStatusSummary(mc)).To(BeTrue())
+
+			Expect(mc.Status.Mode).To(Equal(praestov1alpha1.ModelCacheModePVC))
+			Expect(mc.Status.TotalNodes).To(Equal(int32(1)))
+			switch phase {
+			case praestov1alpha1.ModelCachePhaseReady:
+				Expect(mc.Status.ReadyNodes).To(Equal(int32(1)))
+				Expect(mc.Status.DownloadingNodes).To(Equal(int32(0)))
+				Expect(mc.Status.FailedNodes).To(Equal(int32(0)))
+				Expect(mc.Status.PendingNodes).To(Equal(int32(0)))
+			case praestov1alpha1.ModelCachePhaseDownloading:
+				Expect(mc.Status.ReadyNodes).To(Equal(int32(0)))
+				Expect(mc.Status.DownloadingNodes).To(Equal(int32(1)))
+				Expect(mc.Status.FailedNodes).To(Equal(int32(0)))
+				Expect(mc.Status.PendingNodes).To(Equal(int32(0)))
+			case praestov1alpha1.ModelCachePhasePending:
+				Expect(mc.Status.ReadyNodes).To(Equal(int32(0)))
+				Expect(mc.Status.DownloadingNodes).To(Equal(int32(0)))
+				Expect(mc.Status.FailedNodes).To(Equal(int32(0)))
+				Expect(mc.Status.PendingNodes).To(Equal(int32(1)))
+			case praestov1alpha1.ModelCachePhaseFailed:
+				Expect(mc.Status.ReadyNodes).To(Equal(int32(0)))
+				Expect(mc.Status.DownloadingNodes).To(Equal(int32(0)))
+				Expect(mc.Status.FailedNodes).To(Equal(int32(1)))
+				Expect(mc.Status.PendingNodes).To(Equal(int32(0)))
+			}
+		},
+		Entry("downloading", praestov1alpha1.ModelCachePhaseDownloading),
+		Entry("pending", praestov1alpha1.ModelCachePhasePending),
+		Entry("failed", praestov1alpha1.ModelCachePhaseFailed),
+	)
+
 	It("evicts an unused ready PVC ModelCache after TTL", func() {
 		ttlModelCacheName := fmt.Sprintf("ttl-cache-%s", rand.String(8))
 		ttlModelCacheKey := types.NamespacedName{Name: ttlModelCacheName, Namespace: namespace}
@@ -388,6 +438,51 @@ var _ = Describe("ModelCache Controller", func() {
 		Expect(mc.Status.TotalNodes).To(Equal(int32(1)))
 		Expect(mc.Status.PendingNodes).To(Equal(int32(1)))
 		Expect(mc.Status.Phase).To(Equal(praestov1alpha1.ModelCachePhasePending))
+	})
+
+	It("aggregates node status summary from ModelCacheNodes", func() {
+		localModelCacheName := fmt.Sprintf("node-summary-%s", rand.String(8))
+		localModelCacheKey := types.NamespacedName{Name: localModelCacheName, Namespace: namespace}
+		nodeSelectorKey := "praesto.io/cache-node"
+
+		nodeA := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("worker-a-%s", rand.String(8)), Labels: map[string]string{nodeSelectorKey: "true"}}}
+		nodeB := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("worker-b-%s", rand.String(8)), Labels: map[string]string{nodeSelectorKey: "true"}}}
+		Expect(k8sClient.Create(ctx, nodeA)).To(Succeed())
+		Expect(k8sClient.Create(ctx, nodeB)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, nodeA); _ = k8sClient.Delete(ctx, nodeB) })
+
+		mc := &praestov1alpha1.ModelCache{ObjectMeta: metav1.ObjectMeta{Name: localModelCacheName, Namespace: namespace}, Spec: praestov1alpha1.ModelCacheSpec{Source: praestov1alpha1.Source{Huggingface: praestov1alpha1.HuggingfaceSource{Repo: "org/model", Token: &praestov1alpha1.Token{SecretRef: praestov1alpha1.SecretRef{Name: "hf-secret", Key: "token"}}}}, Storage: praestov1alpha1.Storage{Size: "1Gi"}, NodeSelector: map[string]string{nodeSelectorKey: "true"}}}
+		Expect(k8sClient.Create(ctx, mc)).To(Succeed())
+		DeferCleanup(func() { _ = k8sClient.Delete(ctx, mc) })
+
+		controllerReconciler := &ModelCacheReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+		_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: localModelCacheKey})
+		Expect(err).NotTo(HaveOccurred())
+
+		createdNodeA := &praestov1alpha1.ModelCacheNode{}
+		createdNodeB := &praestov1alpha1.ModelCacheNode{}
+		Eventually(func() error {
+			return k8sClient.Get(ctx, types.NamespacedName{Name: modelCacheNodeName(mc, nodeA.Name)}, createdNodeA)
+		}).Should(Succeed())
+		Eventually(func() error {
+			return k8sClient.Get(ctx, types.NamespacedName{Name: modelCacheNodeName(mc, nodeB.Name)}, createdNodeB)
+		}).Should(Succeed())
+		createdNodeA.Status.Phase = praestov1alpha1.ModelCacheNodePhaseReady
+		createdNodeB.Status.Phase = praestov1alpha1.ModelCacheNodePhaseDownloading
+		Expect(k8sClient.Status().Update(ctx, createdNodeA)).To(Succeed())
+		Expect(k8sClient.Status().Update(ctx, createdNodeB)).To(Succeed())
+
+		_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: localModelCacheKey})
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(k8sClient.Get(ctx, localModelCacheKey, mc)).To(Succeed())
+		Expect(mc.Status.Mode).To(Equal(praestov1alpha1.ModelCacheModeNode))
+		Expect(mc.Status.TotalNodes).To(Equal(int32(2)))
+		Expect(mc.Status.ReadyNodes).To(Equal(int32(1)))
+		Expect(mc.Status.DownloadingNodes).To(Equal(int32(1)))
+		Expect(mc.Status.FailedNodes).To(Equal(int32(0)))
+		Expect(mc.Status.PendingNodes).To(Equal(int32(0)))
+		Expect(mc.Status.Phase).To(Equal(praestov1alpha1.ModelCachePhaseDownloading))
 	})
 
 	It("deletes ModelCacheNodes and waits before removing the ModelCache finalizer", func() {

@@ -11,6 +11,17 @@ Local CSI mode is Praesto's primary and most important workflow.
 - A CSI node driver that mounts the ready cache into application Pods.
 - Simple workload annotations instead of direct PVC wiring.
 
+## Status
+
+Local CSI mode reports `MODE=Node` in `kubectl get modelcache`. `READY` and `TOTAL` summarize the selected nodes:
+
+```text
+NAMESPACE      NAME                    PHASE   MODE   READY   TOTAL   PVC   DOWNLOAD JOB
+praesto-ovms   ovms-distilbert-squad   Ready   Node   1       1
+```
+
+`PVC` and `DOWNLOAD JOB` stay empty because this mode uses `ModelCacheNode`, the node-agent, and the CSI driver rather than a shared PVC workflow.
+
 ## Admin preparation
 
 Prepare only the base path on nodes that should host caches:

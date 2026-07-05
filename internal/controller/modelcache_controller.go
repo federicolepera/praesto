@@ -136,6 +136,7 @@ func (r *ModelCacheReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			modelCache.Status.Phase = praestov1alpha1.ModelCachePhaseFailed
 			modelCache.Status.PvcName = ""
 			modelCache.Status.DownloadJobName = ""
+			setPVCModelCacheStatusSummary(&modelCache)
 			status.SetCondition(&modelCache, status.ConditionPVCReady, metav1.ConditionFalse, "PVCLost", "PVC for ready ModelCache is missing")
 			status.SetCondition(&modelCache, status.ConditionDownloadComplete, metav1.ConditionFalse, "DownloadJobUnknown", "Download job status is unknown because PVC is missing")
 			status.SetCondition(&modelCache, status.ConditionReady, metav1.ConditionFalse, "ModelNotReady", "Model is not ready because PVC is missing")
@@ -149,6 +150,7 @@ func (r *ModelCacheReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			modelCache.Status.Phase = praestov1alpha1.ModelCachePhaseFailed
 			modelCache.Status.PvcName = pvc.Name
 			modelCache.Status.DownloadJobName = ""
+			setPVCModelCacheStatusSummary(&modelCache)
 			status.SetCondition(&modelCache, status.ConditionPVCReady, metav1.ConditionFalse, "PVCDeleting", "PVC for ready ModelCache is being deleted")
 			status.SetCondition(&modelCache, status.ConditionDownloadComplete, metav1.ConditionFalse, "DownloadJobUnknown", "Download job status is unknown because PVC is being deleted")
 			status.SetCondition(&modelCache, status.ConditionReady, metav1.ConditionFalse, "ModelNotReady", "Model is not ready because PVC is being deleted")
@@ -162,6 +164,7 @@ func (r *ModelCacheReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			modelCache.Status.Phase = praestov1alpha1.ModelCachePhaseFailed
 			modelCache.Status.PvcName = pvc.Name
 			modelCache.Status.DownloadJobName = ""
+			setPVCModelCacheStatusSummary(&modelCache)
 			status.SetCondition(&modelCache, status.ConditionPVCReady, metav1.ConditionFalse, "PVCLost", "PVC for ready ModelCache is no longer bound")
 			status.SetCondition(&modelCache, status.ConditionDownloadComplete, metav1.ConditionFalse, "DownloadJobUnknown", "Download job status is unknown because PVC is not bound")
 			status.SetCondition(&modelCache, status.ConditionReady, metav1.ConditionFalse, "ModelNotReady", "Model is not ready because PVC is not bound")
@@ -169,6 +172,12 @@ func (r *ModelCacheReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 				logger.Error(updateErr, "unable to update ModelCache status after PVC unbound")
 			}
 			return ctrl.Result{}, fmt.Errorf("PVC %s for ready ModelCache is not bound anymore", pvc.Name)
+		}
+		if setPVCModelCacheStatusSummary(&modelCache) {
+			if updateErr := status.Update(ctx, r.Client, &modelCache); updateErr != nil {
+				logger.Error(updateErr, "unable to update ready ModelCache status summary")
+				return ctrl.Result{}, updateErr
+			}
 		}
 		logger.Info("ModelCache is already ready", "pvc", pvc.Name)
 		return ctrl.Result{}, nil
@@ -182,6 +191,7 @@ func (r *ModelCacheReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		modelCache.Status.Phase = praestov1alpha1.ModelCachePhaseFailed
 		modelCache.Status.PvcName = ""
 		modelCache.Status.DownloadJobName = ""
+		setPVCModelCacheStatusSummary(&modelCache)
 		status.SetCondition(&modelCache, status.ConditionPVCReady, metav1.ConditionFalse, "StorageClassNotFound", fmt.Sprintf("StorageClass %q does not exist", modelCache.Spec.Storage.StorageClassName))
 		status.SetCondition(&modelCache, status.ConditionDownloadComplete, metav1.ConditionFalse, "DownloadPending", "Download job has not started because storage provisioning failed")
 		status.SetCondition(&modelCache, status.ConditionReady, metav1.ConditionFalse, "StorageUnavailable", "Model is not ready because its StorageClass does not exist")
@@ -205,6 +215,7 @@ func (r *ModelCacheReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			modelCache.Status.Phase = praestov1alpha1.ModelCachePhaseFailed
 			modelCache.Status.PvcName = ""
 			modelCache.Status.DownloadJobName = ""
+			setNodeModelCacheStatusSummary(&modelCache, 0, 0, 0, 0, 0)
 			status.SetCondition(&modelCache, status.ConditionPVCReady, metav1.ConditionFalse, "NoNodesFound", fmt.Sprintf("No Nodes found matching nodeSelector %v", labelSelector))
 			status.SetCondition(&modelCache, status.ConditionDownloadComplete, metav1.ConditionFalse, "DownloadPending", "Download job has not started because no suitable nodes were found")
 			status.SetCondition(&modelCache, status.ConditionReady, metav1.ConditionFalse, "NoNodesAvailable", "Model is not ready because no suitable nodes were found")
@@ -243,6 +254,7 @@ func (r *ModelCacheReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		if pvc.Status.Phase != corev1.ClaimBound {
 			modelCache.Status.Phase = praestov1alpha1.ModelCachePhasePending
 			modelCache.Status.PvcName = pvc.Name
+			setPVCModelCacheStatusSummary(&modelCache)
 			status.SetCondition(&modelCache, status.ConditionPVCReady, metav1.ConditionFalse, "PVCPending", fmt.Sprintf("PVC %s is not bound yet; check that StorageClass %q can provision ReadWriteMany volumes", pvc.Name, modelCache.Spec.Storage.StorageClassName))
 			status.SetCondition(&modelCache, status.ConditionDownloadComplete, metav1.ConditionFalse, "DownloadPending", "Download job has not started yet")
 			status.SetCondition(&modelCache, status.ConditionReady, metav1.ConditionFalse, "WaitingForPVC", "Model is waiting for PVC to be bound")
@@ -264,6 +276,7 @@ func (r *ModelCacheReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			if job != nil {
 				modelCache.Status.DownloadJobName = job.Name
 			}
+			setPVCModelCacheStatusSummary(&modelCache)
 			if err := status.Update(ctx, r.Client, &modelCache); err != nil {
 				logger.Error(err, "unable to update ModelCache status")
 			}
@@ -276,6 +289,7 @@ func (r *ModelCacheReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			modelCache.Status.Phase = praestov1alpha1.ModelCachePhaseFailed
 			modelCache.Status.PvcName = pvc.Name
 			modelCache.Status.DownloadJobName = job.Name
+			setPVCModelCacheStatusSummary(&modelCache)
 			status.SetCondition(&modelCache, status.ConditionPVCReady, metav1.ConditionTrue, "PVCBound", fmt.Sprintf("PVC %s is bound", pvc.Name))
 			status.SetCondition(&modelCache, status.ConditionDownloadComplete, metav1.ConditionFalse, "JobFailed", err.Error())
 			status.SetCondition(&modelCache, status.ConditionReady, metav1.ConditionFalse, "DownloadFailed", "Model is not ready because download job failed")
@@ -290,6 +304,7 @@ func (r *ModelCacheReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			modelCache.Status.PvcName = pvc.Name
 			modelCache.Status.DownloadJobName = job.Name
 			modelCache.Status.LastUsedTime = metav1.Now()
+			setPVCModelCacheStatusSummary(&modelCache)
 			status.SetCondition(&modelCache, status.ConditionPVCReady, metav1.ConditionTrue, "PVCBound", fmt.Sprintf("PVC %s is bound", pvc.Name))
 			status.SetCondition(&modelCache, status.ConditionDownloadComplete, metav1.ConditionTrue, "JobSucceeded", "Download job completed successfully")
 			status.SetCondition(&modelCache, status.ConditionReady, metav1.ConditionTrue, "ModelReady", "Model is ready to be mounted")
@@ -301,6 +316,7 @@ func (r *ModelCacheReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			modelCache.Status.Phase = praestov1alpha1.ModelCachePhaseDownloading
 			modelCache.Status.PvcName = pvc.Name
 			modelCache.Status.DownloadJobName = job.Name
+			setPVCModelCacheStatusSummary(&modelCache)
 			status.SetCondition(&modelCache, status.ConditionPVCReady, metav1.ConditionTrue, "PVCBound", fmt.Sprintf("PVC %s is bound", pvc.Name))
 			status.SetCondition(&modelCache, status.ConditionDownloadComplete, metav1.ConditionFalse, "JobRunning", "Download job is still running")
 			status.SetCondition(&modelCache, status.ConditionReady, metav1.ConditionFalse, "Downloading", "Model is downloading")
@@ -315,6 +331,67 @@ func (r *ModelCacheReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 func isLocalModelCache(modelCache *praestov1alpha1.ModelCache) bool {
 	return modelCache.Spec.Storage.StorageClassName == ""
+}
+
+func setPVCModelCacheStatusSummary(modelCache *praestov1alpha1.ModelCache) bool {
+	return setModelCacheStatusSummary(
+		modelCache,
+		praestov1alpha1.ModelCacheModePVC,
+		1,
+		readyCountForPhase(modelCache.Status.Phase),
+		downloadingCountForPhase(modelCache.Status.Phase),
+		failedCountForPhase(modelCache.Status.Phase),
+		pendingCountForPhase(modelCache.Status.Phase),
+	)
+}
+
+func setNodeModelCacheStatusSummary(modelCache *praestov1alpha1.ModelCache, totalNodes, readyNodes, downloadingNodes, failedNodes, pendingNodes int32) bool {
+	return setModelCacheStatusSummary(modelCache, praestov1alpha1.ModelCacheModeNode, totalNodes, readyNodes, downloadingNodes, failedNodes, pendingNodes)
+}
+
+func setModelCacheStatusSummary(modelCache *praestov1alpha1.ModelCache, mode string, totalNodes, readyNodes, downloadingNodes, failedNodes, pendingNodes int32) bool {
+	changed := modelCache.Status.Mode != mode ||
+		modelCache.Status.TotalNodes != totalNodes ||
+		modelCache.Status.ReadyNodes != readyNodes ||
+		modelCache.Status.DownloadingNodes != downloadingNodes ||
+		modelCache.Status.FailedNodes != failedNodes ||
+		modelCache.Status.PendingNodes != pendingNodes
+
+	modelCache.Status.Mode = mode
+	modelCache.Status.TotalNodes = totalNodes
+	modelCache.Status.ReadyNodes = readyNodes
+	modelCache.Status.DownloadingNodes = downloadingNodes
+	modelCache.Status.FailedNodes = failedNodes
+	modelCache.Status.PendingNodes = pendingNodes
+	return changed
+}
+
+func readyCountForPhase(phase string) int32 {
+	if phase == praestov1alpha1.ModelCachePhaseReady {
+		return 1
+	}
+	return 0
+}
+
+func downloadingCountForPhase(phase string) int32 {
+	if phase == praestov1alpha1.ModelCachePhaseDownloading {
+		return 1
+	}
+	return 0
+}
+
+func failedCountForPhase(phase string) int32 {
+	if phase == praestov1alpha1.ModelCachePhaseFailed {
+		return 1
+	}
+	return 0
+}
+
+func pendingCountForPhase(phase string) int32 {
+	if phase == praestov1alpha1.ModelCachePhasePending {
+		return 1
+	}
+	return 0
 }
 
 func (r *ModelCacheReconciler) reconcileReadyPVCModelCacheUsage(ctx context.Context, modelCache *praestov1alpha1.ModelCache) (bool, ctrl.Result, error) {
@@ -406,6 +483,7 @@ func markPVCModelCacheEvicted(modelCache *praestov1alpha1.ModelCache) {
 	modelCache.Status.Phase = praestov1alpha1.ModelCachePhaseEvicted
 	modelCache.Status.PvcName = downloader.PVCNameForModelCache(modelCache.Name)
 	modelCache.Status.DownloadJobName = ""
+	setPVCModelCacheStatusSummary(modelCache)
 	status.SetCondition(modelCache, status.ConditionPVCReady, metav1.ConditionFalse, "CacheEvicted", "PVC cache was evicted after being unused past its TTL")
 	status.SetCondition(modelCache, status.ConditionDownloadComplete, metav1.ConditionFalse, "CacheEvicted", "Downloaded model artifacts are no longer present in the PVC cache")
 	status.SetCondition(modelCache, status.ConditionReady, metav1.ConditionFalse, "CacheEvicted", "Model cache was evicted and will be rehydrated on demand")
@@ -576,13 +654,9 @@ func (r *ModelCacheReconciler) updateModelCacheStatusFromNodes(ctx context.Conte
 		}
 	}
 
-	modelCache.Status.TotalNodes = totalNodes
-	modelCache.Status.ReadyNodes = readyNodes
-	modelCache.Status.DownloadingNodes = downloadingNodes
-	modelCache.Status.FailedNodes = failedNodes
-	modelCache.Status.PendingNodes = pendingNodes
 	modelCache.Status.PvcName = ""
 	modelCache.Status.DownloadJobName = ""
+	setNodeModelCacheStatusSummary(modelCache, totalNodes, readyNodes, downloadingNodes, failedNodes, pendingNodes)
 
 	switch {
 	case totalNodes == 0:
