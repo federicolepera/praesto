@@ -18,6 +18,15 @@ spec:
     - jsonPath: .status.phase
       name: Phase
       type: string
+    - jsonPath: .status.mode
+      name: Mode
+      type: string
+    - jsonPath: .status.readyNodes
+      name: Ready
+      type: integer
+    - jsonPath: .status.totalNodes
+      name: Total
+      type: integer
     - jsonPath: .status.pvcName
       name: PVC
       type: string
@@ -294,6 +303,11 @@ spec:
                 type: integer
               lastUsedTime:
                 format: date-time
+                type: string
+              mode:
+                enum:
+                - PVC
+                - Node
                 type: string
               pendingNodes:
                 format: int32
